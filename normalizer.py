@@ -217,27 +217,25 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
 def get_address_blocking_keys(raw_addr: str, store_name: str = "") -> List[Tuple[str, str]]:
     """
     Generates multi-pass blocking keys for candidate retrieval.
-    Includes:
-      - (city + street, base_house)
-      - (street, base_house)
-      - (code_..., "code") if store has an internal store code
+    All keys are geographically anchored to prevent cross-region false matches.
     """
     base_house, full_house, city, street_tokens = extract_address_details(raw_addr)
     if not base_house:
         base_house = "б/н"
 
     keys = []
+    city_token = city.split()[0] if city else ""
 
-    # Index by store code if available (e.g. 304S, H085, 604)
+    # Geographically anchored code keys (city + code or street + code)
     code = extract_store_code(store_name)
     if code:
-        keys.append(("code_" + code, "code"))
-        if city:
-            city_token = city.split()[0]
+        if city_token:
             keys.append((f"{city_token}_code_{code}", "code"))
+        for st in street_tokens[:2]:
+            keys.append((f"{st}_code_{code}", "code"))
 
-    if city:
-        city_token = city.split()[0]
+    # Street and city keys with house number
+    if city_token:
         for st in street_tokens[:3]:
             keys.append((f"{city_token}_{st}", base_house))
 

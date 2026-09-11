@@ -195,3 +195,28 @@ def test_missing_house_and_alphanumeric_store_codes():
     assert results[2][1] == STATUS_IDENTICAL
 
 
+def test_same_code_different_cities_never_merge():
+    """
+    Outlets that share a store number (e.g. №118 or №149) but are in different cities/streets
+    must NEVER merge together!
+    """
+    # Master outlet 1 in Dimitrovgrad
+    r_dimitrovgrad = make_row(100, "№118 - Димитровград 1", "г. Димитровград, ул. Московска", 1, "Сплат?Глобал")
+    # Distributor outlet in Arzamas
+    r_arzamas = make_row(200, "Торговый центр Скиф ООО Спар №118", "607247, Нижегородская обл, Арзамасский р-н, Выездное рп, Куликова ул, дом № 28а", 0, "Сладкая жизнь плюс ООО")
+
+    records = [
+        OutletRecord(0, r_dimitrovgrad, COL_INDICES),
+        OutletRecord(1, r_arzamas, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
+
+    # Dimitrovgrad master has no matches, so it must be excluded!
+    # Arzamas distributor point is unmatched, so it must be UNIQUE!
+    assert len(results) == 1
+    assert results[0][2][COL_INDICES['id']] == '200'
+    assert results[0][1] == STATUS_UNIQUE
+
+
+
