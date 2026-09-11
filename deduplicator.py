@@ -63,7 +63,7 @@ class OutletRecord:
 
         self.store_code = extract_store_code(self.name)
         self.clean_name = clean_store_name(self.name)
-        self.blocking_keys = get_address_blocking_keys(self.address)
+        self.blocking_keys = get_address_blocking_keys(self.address, self.name)
 
 
 def calculate_outlet_match_score(
@@ -74,8 +74,12 @@ def calculate_outlet_match_score(
     Calculates similarity between two outlets at the same address.
     Returns: (score, is_exact_match)
     """
-    # Hard rule: base house numbers MUST match
-    if not outlet1.base_house or not outlet2.base_house or outlet1.base_house != outlet2.base_house:
+    # Hard rule: If both outlets have explicit house numbers (neither is "б/н"),
+    # different house numbers can NEVER merge!
+    has_num1 = bool(outlet1.base_house and outlet1.base_house != "б/н")
+    has_num2 = bool(outlet2.base_house and outlet2.base_house != "б/н")
+
+    if has_num1 and has_num2 and outlet1.base_house != outlet2.base_house:
         return 0.0, False
 
     name1 = outlet1.clean_name
@@ -101,8 +105,8 @@ def calculate_outlet_match_score(
     house_match = (outlet1.full_house == outlet2.full_house)
 
     if is_national:
-        # For national networks: code match or high name match (>=90) at same address -> exact
-        is_exact = (code_match or name_score >= 90) and house_match
+        # For national networks: code match or high name match (>=90) -> exact
+        is_exact = (code_match or name_score >= 90)
     else:
         # For regular distributors:
         # Even if store code matches, if the legal entity / brand name differs

@@ -168,3 +168,30 @@ def test_individual_row_status_with_different_legal_entities():
     # Distributor point with different legal entity is SIMILAR
     assert results[2][1] == STATUS_SIMILAR
 
+
+def test_missing_house_and_alphanumeric_store_codes():
+    """
+    Outlets with missing house numbers ('б/н', 'n/a' or omitted) and alphanumeric store codes
+    (like '304S') from national networks must merge with status STATUS_IDENTICAL.
+    """
+    r_master = make_row(10, "Пятерочка 304S", "Ставропольский край, Ессентуки, Октябрьская улица, б\\н", 1, "Сплат?Глобал")
+    r_d1 = make_row(20, "Дискаунтер_304S", "Ставропольский край г.Ессентуки, Октябрьская ул", 0, "ПЯТЁРОЧКА")
+    r_d2 = make_row(30, "Дискаунтер_304S", "Ставропольский край, Ессентуки, Октябрьская улица, n\\a", 0, "ПЯТЁРОЧКА")
+
+    records = [
+        OutletRecord(0, r_master, COL_INDICES),
+        OutletRecord(1, r_d1, COL_INDICES),
+        OutletRecord(2, r_d2, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
+
+    assert len(results) == 3
+    # All share the same group ID
+    assert results[0][0] == results[1][0] == results[2][0]
+    # All get STATUS_IDENTICAL
+    assert results[0][1] == STATUS_IDENTICAL
+    assert results[1][1] == STATUS_IDENTICAL
+    assert results[2][1] == STATUS_IDENTICAL
+
+

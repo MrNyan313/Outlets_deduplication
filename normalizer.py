@@ -48,10 +48,15 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
          'зд.7 к.4' -> ('7', '7к4')
          '15 стр 3' -> ('15', '15к3')
          '33\\19' -> ('33', '33/19')
+         'б\\н' or no house -> ('б/н', 'б/н')
     """
     t = normalize_text(addr)
     if not t:
-        return "", ""
+        return "б/н", "б/н"
+
+    # Explicit marker: б/н, б\н, б.н., без номера, n/a, n\a
+    if re.search(r'\b(?:б\s*[/\\.]\s*н|без\s+номера|n\s*[/\\.]\s*a)\b', t):
+        return "б/н", "б/н"
 
     # Remove 6-digit postal code
     t = re.sub(r'\b\d{6}\b', '', t)
@@ -105,38 +110,46 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
             full += '/' + slash
         return base_num, full
 
-    # 5. Fallback: find any standalone number that might be a house
+    # 5. Standalone number that is not postal code
     nums = re.findall(r'\b(\d+([а-яa-z])?)\b', t)
     if nums:
         val = nums[-1][0]
         base = re.match(r'\d+', val).group(0)
         return base, val
 
-    return "", ""
+    # If no number at all is specified in address: "б/н"
+    return "б/н", "б/н"
 
 
 def extract_store_code(name: str) -> str:
     """
     Extracts store code / number from a store name.
-    e.g. 'Дискаунтер_H085' -> 'H085'
+    e.g. 'Дискаунтер_304S' -> '304S'
+         'Пятерочка 304S' -> '304S'
+         'X5 H085' -> 'H085'
          'Малинка №604' -> '604'
          'Спар № 118' -> '118'
-         'X5 E231' -> 'E231'
+         'X5 2680' -> '2680'
     """
     if not name:
         return ""
     t = str(name).strip()
 
-    # 1. Look for number marker: № 604, №604, N 604, #604
+    # 1. Number marker: № 604, №604, N 604, #604
     m_no = re.search(r'[№N#]\s*([0-9]+[а-яa-z]?)', t, re.IGNORECASE)
     if m_no:
         return m_no.group(1).lower()
 
-    # 2. Look for alphanumeric store codes: H085, E231, H928, etc.
-    m_code = re.search(r'(?:^|[^a-zA-Zа-яА-Я0-9])([a-zA-Zа-яА-Я]\d{3,4})(?:$|[^a-zA-Zа-яА-Я0-9])', t)
+    # 2. Alphanumeric store codes: e.g. H085, E231 (letter + digits) or 304S (digits + letter)
+    m_code = re.search(r'(?:^|[^a-zA-Zа-яА-Я0-9])([a-zA-Zа-яА-Я]\d{2,5}|\d{2,5}[a-zA-Zа-яА-Я])(?:$|[^a-zA-Zа-яА-Я0-9])', t)
     if m_code:
         code = m_code.group(1).upper()
         return code.translate(CYR_TO_LAT)
+
+    # 3. X5 store number: "X5 2680" or "Х5 2680"
+    m_x5 = re.search(r'\b(?:x5|х5)\s*(\d{2,5})\b', t, re.IGNORECASE)
+    if m_x5:
+        return m_x5.group(1)
 
     return ""
 
@@ -175,7 +188,6 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     # Detect city from parts
     for part in parts:
         words = re.findall(r'[а-яa-z0-9]+', part)
-        part_set = set(words)
 
         # Check major city
         for mc in MAJOR_CITIES:
@@ -196,31 +208,39 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     all_words = re.findall(r'[а-яa-z0-9]+', addr_clean)
     for w in all_words:
         if len(w) >= 3 and w not in ADDRESS_STOP_WORDS:
-            # exclude city words from street tokens if city is known
             if not city or w not in city.split():
                 street_words.append(w)
 
     return base_house, full_house, city, street_words
 
 
-def get_address_blocking_keys(raw_addr: str) -> List[Tuple[str, str]]:
+def get_address_blocking_keys(raw_addr: str, store_name: str = "") -> List[Tuple[str, str]]:
     """
     Generates multi-pass blocking keys for candidate retrieval.
-    Each key is a tuple: (token, base_house)
-    where token can be a distinctive street token or (city + street token).
+    Includes:
+      - (city + street, base_house)
+      - (street, base_house)
+      - (code_..., "code") if store has an internal store code
     """
     base_house, full_house, city, street_tokens = extract_address_details(raw_addr)
     if not base_house:
-        return []
+        base_house = "б/н"
 
     keys = []
-    # If city is known, combine (city, street_token, base_house)
+
+    # Index by store code if available (e.g. 304S, H085, 604)
+    code = extract_store_code(store_name)
+    if code:
+        keys.append(("code_" + code, "code"))
+        if city:
+            city_token = city.split()[0]
+            keys.append((f"{city_token}_code_{code}", "code"))
+
     if city:
         city_token = city.split()[0]
         for st in street_tokens[:3]:
             keys.append((f"{city_token}_{st}", base_house))
 
-    # Secondary keys: (street_token, base_house)
     for st in street_tokens[:3]:
         keys.append((st, base_house))
 
