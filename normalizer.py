@@ -3,29 +3,43 @@
 import re
 from typing import Tuple, List, Set
 
-# Organizational legal forms to remove from store names
+# Organizational legal forms and generic chain words to remove from store names
 LEGAL_FORMS = {
     'ооо', 'ип', 'зао', 'оао', 'ао', 'пао', 'тд', 'тк', 'маг', 'магазин',
-    'см', 'с/м', 'супермаркет', 'гипермаркет', 'универсам', 'гастроном',
-    'бузоо', 'црб', 'чп', 'лтд', 'ltd'
+    'см', 'с/м', 'супермаркет', 'гипермаркет', 'дискаунтер', 'универсам',
+    'гастроном', 'бузоо', 'црб', 'чп', 'лтд', 'ltd', 'ссив', 'тт'
+}
+
+# Regional adjectives and words that must NOT be treated as street names
+REGION_WORDS = {
+    'московская', 'ленинградская', 'нижегородская', 'самарская', 'владимирская',
+    'свердловская', 'ростовская', 'челябинская', 'воронежская', 'волгоградская',
+    'краснодарский', 'ставропольский', 'пермский', 'алтайский', 'приморский',
+    'башкортостан', 'татарстан', 'дагестан', 'удмуртская', 'чувашская',
+    'область', 'обл', 'край', 'респ', 'республика', 'ао', 'район', 'рн',
+    'р-н', 'россия', 'рф', 'федерация'
 }
 
 # Stop words in address parsing
-ADDRESS_STOP_WORDS = {
-    'россия', 'рф', 'федерация',
-    'обл', 'область', 'край', 'респ', 'республика', 'ао', 'рн', 'район',
+ADDRESS_STOP_WORDS = REGION_WORDS | {
     'г', 'город', 'пгт', 'рп', 'п', 'поселок', 'пос', 'д', 'деревня',
     'с', 'село', 'ст', 'станица', 'х', 'хутор', 'с/с', 'с/совет',
     'ул', 'улица', 'пркт', 'проспект', 'пр', 'проезд', 'пер', 'переулок',
     'бул', 'бульвар', 'ш', 'шоссе', 'наб', 'набережная', 'пл', 'площадь',
     'тракт', 'линия', 'аллея', 'тупик', 'кв-л', 'квартал', 'мкр', 'микрорайон',
     'дом', 'кв', 'пом', 'стр', 'корп', 'здание', 'зд', 'корпус', 'строение',
-    'литера', 'лит', 'помещение', 'комн', 'оф', 'офис', 'эт', 'этаж'
+    'литера', 'лит', 'помещение', 'комн', 'оф', 'офис', 'эт', 'этаж',
+    'ссив', 'дискаунтер', 'гипермаркет', 'супермаркет'
 }
 
 MAJOR_CITIES = {
     'москва', 'санкт-петербург', 'петербург', 'севастополь'
 }
+
+STREET_PATTERNS = [
+    r'\b(?:ул|улица|пр-кт|проспект|проезд|пер|переулок|бул|бульвар|шоссе|ш|наб|набережная|аллея|тракт|тупик)\.?\s+([а-яa-z0-9\-]+(?:\s+[а-яa-z0-9\-]+){0,2})',
+    r'([а-яa-z0-9\-]+(?:\s+[а-яa-z0-9\-]+){0,2})\s+\b(?:ул|улица|пр-кт|проспект|проезд|пер|переулок|бул|бульвар|шоссе|ш|наб|набережная|аллея|тракт|тупик)\b'
+]
 
 # Mapping Cyrillic lookalikes to Latin for store codes
 CYR_TO_LAT = str.maketrans('АВЕКМНОРСТУХ', 'ABEKMHOPCTYX')
@@ -124,7 +138,11 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
 def extract_store_code(name: str) -> str:
     """
     Extracts store code / number from a store name.
-    e.g. 'Дискаунтер_304S' -> '304S'
+    e.g. 'Дискаунтер_363H' -> '363H'
+         'Дискаунтер_5181' -> '5181'
+         '5268' -> '5268'
+         '5282' -> '5282'
+         'Дискаунтер_304S' -> '304S'
          'Пятерочка 304S' -> '304S'
          'X5 H085' -> 'H085'
          'Малинка №604' -> '604'
@@ -150,6 +168,15 @@ def extract_store_code(name: str) -> str:
     m_x5 = re.search(r'\b(?:x5|х5)\s*(\d{2,5})\b', t, re.IGNORECASE)
     if m_x5:
         return m_x5.group(1)
+
+    # 4. Chain prefix followed by number: e.g. "Дискаунтер_5181", "Дискаунтер_5268"
+    m_chain_num = re.search(r'\b(?:дискаунтер|гипермаркет|супермаркет|магазин|маг|тт)[_ ]+(\d{2,6})\b', t, re.IGNORECASE)
+    if m_chain_num:
+        return m_chain_num.group(1)
+
+    # 5. Pure numeric store name / code: e.g. "5268", "5282", "2111"
+    if re.match(r'^\d{2,6}$', t.strip()):
+        return t.strip()
 
     return ""
 
@@ -183,9 +210,8 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     parts = [p.strip() for p in addr_clean.split(',') if p.strip()]
 
     city = ""
-    street_words = []
 
-    # Detect city from parts
+    # Detect city
     for part in parts:
         words = re.findall(r'[а-яa-z0-9]+', part)
 
@@ -204,12 +230,25 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
                 city = ' '.join(c_words)
                 break
 
-    # Extract street tokens (words that are not stop words)
-    all_words = re.findall(r'[а-яa-z0-9]+', addr_clean)
-    for w in all_words:
-        if len(w) >= 3 and w not in ADDRESS_STOP_WORDS:
-            if not city or w not in city.split():
-                street_words.append(w)
+    # Extract clean street tokens using explicit street patterns
+    street_words = []
+    for pat in STREET_PATTERNS:
+        m = re.search(pat, addr_clean)
+        if m:
+            cand = m.group(1).strip()
+            cand = re.sub(r'^\d+\s*|\s*\d+$', '', cand).strip()
+            words = [w for w in re.findall(r'[а-яa-z0-9]+', cand) if len(w) >= 3 and w not in ADDRESS_STOP_WORDS]
+            if words:
+                street_words = words
+                break
+
+    # Fallback if street pattern didn't match: take words that are not region/city/stop words
+    if not street_words:
+        all_words = re.findall(r'[а-яa-z0-9]+', addr_clean)
+        for w in all_words:
+            if len(w) >= 3 and w not in ADDRESS_STOP_WORDS:
+                if not city or w not in city.split():
+                    street_words.append(w)
 
     return base_house, full_house, city, street_words
 

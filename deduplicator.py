@@ -74,8 +74,12 @@ def calculate_outlet_match_score(
     Calculates similarity between two outlets at the same address.
     Returns: (score, is_exact_match)
     """
-    # 1. Geographic checks: outlets must be at the same physical location
-    # 1a. House check: If both outlets have explicit house numbers (neither is "б/н"),
+    # 1. HARD RULE: If both outlets have store codes and they CONFLICT, they are different stores!
+    if outlet1.store_code and outlet2.store_code and outlet1.store_code != outlet2.store_code:
+        return 0.0, False
+
+    # 2. Geographic checks: outlets must be at the same physical location
+    # 2a. House check: If both outlets have explicit house numbers (neither is "б/н"),
     # different house numbers can NEVER merge!
     has_num1 = bool(outlet1.base_house and outlet1.base_house != "б/н")
     has_num2 = bool(outlet2.base_house and outlet2.base_house != "б/н")
@@ -83,7 +87,7 @@ def calculate_outlet_match_score(
     if has_num1 and has_num2 and outlet1.base_house != outlet2.base_house:
         return 0.0, False
 
-    # 1b. Street check: must have at least one overlapping street token or high fuzzy match
+    # 2b. Street check: must have at least one overlapping street token or high fuzzy match
     s_set1 = set(outlet1.street_tokens)
     s_set2 = set(outlet2.street_tokens)
     street_overlap = bool(s_set1 and s_set2 and (s_set1 & s_set2))
@@ -95,7 +99,7 @@ def calculate_outlet_match_score(
     if not street_overlap and street_fuzzy < 70:
         return 0.0, False
 
-    # 1c. City check: if both cities are identified, they must not conflict
+    # 2c. City check: if both cities are identified, they must not conflict
     if outlet1.city and outlet2.city:
         c_set1 = set(outlet1.city.split())
         c_set2 = set(outlet2.city.split())
@@ -104,7 +108,7 @@ def calculate_outlet_match_score(
         if not city_overlap and city_fuzzy < 65:
             return 0.0, False
 
-    # 2. Store name and code checks
+    # 3. Store name and code checks
     name1 = outlet1.clean_name
     name2 = outlet2.clean_name
 
@@ -123,7 +127,7 @@ def calculate_outlet_match_score(
     else:
         score = name_score
 
-    # 3. Determine whether it is an exact (identical) or similar match:
+    # 4. Determine whether it is an exact (identical) or similar match:
     is_national = outlet1.is_national or outlet2.is_national
     house_match = (outlet1.full_house == outlet2.full_house)
 

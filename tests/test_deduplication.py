@@ -219,4 +219,42 @@ def test_same_code_different_cities_never_merge():
     assert results[0][1] == STATUS_UNIQUE
 
 
+def test_different_store_codes_never_merge():
+    """
+    Two outlets of the same national distributor with different store codes
+    (e.g. 5268 vs 5282) must NEVER merge.
+    """
+    r1 = make_row(1, "5268", "5268 ССИВ Москва г, ул Академика Волгина, д.15,к.3", 0, "СОЮЗ СВ. ИОАННА ВОИНА ООО (take-off) с 01.04.2018")
+    r2 = make_row(2, "5282", "5282 ССИВ Москва г, аллея Долгопрудная, д.15, к. 4", 0, "СОЮЗ СВ. ИОАННА ВОИНА ООО (take-off) с 01.04.2018")
+
+    records = [OutletRecord(0, r1, COL_INDICES), OutletRecord(1, r2, COL_INDICES)]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
+
+    assert len(results) == 2
+    # Must have different group IDs
+    assert results[0][0] != results[1][0]
+    assert results[0][1] == STATUS_UNIQUE
+    assert results[1][1] == STATUS_UNIQUE
+
+
+def test_same_house_number_different_streets_never_merge():
+    """
+    Two outlets with the same house number in the same city but on different streets
+    (e.g. Arbat 24 vs Osennyaya 24) must NEVER merge.
+    """
+    r1 = make_row(1, "Дискаунтер_363H", "Московская обл. г.Москва, Арбат ул 24", 0, "ПЯТЁРОЧКА")
+    r2 = make_row(2, "Дискаунтер_6905", "Московская обл. г.Москва, Осенняя ул. 24", 0, "ПЯТЁРОЧКА")
+
+    records = [OutletRecord(0, r1, COL_INDICES), OutletRecord(1, r2, COL_INDICES)]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
+
+    assert len(results) == 2
+    assert results[0][0] != results[1][0]
+    assert results[0][1] == STATUS_UNIQUE
+    assert results[1][1] == STATUS_UNIQUE
+
+
+
 
