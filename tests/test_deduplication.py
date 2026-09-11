@@ -137,3 +137,34 @@ def test_multiple_distributors_match_single_master():
     assert results[0][0] == results[1][0] == results[2][0]
     # Master row is first
     assert results[0][2][COL_INDICES['IsVendor']] == '1'
+
+
+def test_individual_row_status_with_different_legal_entities():
+    """
+    If a distributor outlet matches master by name exactly, it gets STATUS_IDENTICAL.
+    If another distributor outlet at the same store has a different legal entity (e.g. Перминов vs Люкс),
+    it gets STATUS_SIMILAR.
+    """
+    r_master = make_row(1, "Люкс ООО маг.Малинка №604", "Нижегородская обл, Бор г, Заводская ул, дом № 5а", 1, "Сплат?Глобал")
+    r_d_exact = make_row(2, "Люкс ООО маг.Малинка №604", "Нижегородская обл, Бор г, Заводская ул, дом № 5а", 0, "Сладкая жизнь плюс ООО")
+    r_d_diff_entity = make_row(3, "Перминов В.В ИП маг.Малинка № 604", "Нижегородская область обл, Бор г, Заводская ул, дом № 5А", 0, "Сладкая жизнь плюс ООО")
+
+    records = [
+        OutletRecord(0, r_master, COL_INDICES),
+        OutletRecord(1, r_d_exact, COL_INDICES),
+        OutletRecord(2, r_d_diff_entity, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
+
+    assert len(results) == 3
+    # All share the same group ID
+    assert results[0][0] == results[1][0] == results[2][0]
+
+    # Master is IDENTICAL because it has an exact match
+    assert results[0][1] == STATUS_IDENTICAL
+    # Exact distributor point is IDENTICAL
+    assert results[1][1] == STATUS_IDENTICAL
+    # Distributor point with different legal entity is SIMILAR
+    assert results[2][1] == STATUS_SIMILAR
+

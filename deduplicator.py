@@ -78,29 +78,38 @@ def calculate_outlet_match_score(
     if not outlet1.base_house or not outlet2.base_house or outlet1.base_house != outlet2.base_house:
         return 0.0, False
 
-    # 1. Matching by store code (e.g. H085, №604, 118)
-    if outlet1.store_code and outlet2.store_code and outlet1.store_code == outlet2.store_code:
-        is_exact = (outlet1.full_house == outlet2.full_house)
-        return 100.0, is_exact
-
-    # 2. String similarity on cleaned names
     name1 = outlet1.clean_name
     name2 = outlet2.clean_name
 
-    if not name1 or not name2:
-        return 0.0, False
+    code_match = (
+        bool(outlet1.store_code) and
+        bool(outlet2.store_code) and
+        (outlet1.store_code == outlet2.store_code)
+    )
 
-    if name1 == name2:
-        is_exact = (outlet1.full_house == outlet2.full_house)
-        return 100.0, is_exact
+    token_set = fuzz.token_set_ratio(name1, name2) if (name1 and name2) else 0.0
+    token_sort = fuzz.token_sort_ratio(name1, name2) if (name1 and name2) else 0.0
+    name_score = max(token_set, token_sort)
 
-    # Fuzzy token metrics
-    token_set = fuzz.token_set_ratio(name1, name2)
-    token_sort = fuzz.token_sort_ratio(name1, name2)
-    score = max(token_set, token_sort)
+    if code_match:
+        score = 100.0
+    else:
+        score = name_score
 
-    # Exact match requires both name and full house to match perfectly
-    is_exact = (score >= NAME_EXACT_THRESHOLD and outlet1.full_house == outlet2.full_house)
+    # Determine whether it is an exact (identical) or similar match:
+    is_national = outlet1.is_national or outlet2.is_national
+    house_match = (outlet1.full_house == outlet2.full_house)
+
+    if is_national:
+        # For national networks: code match or high name match (>=90) at same address -> exact
+        is_exact = (code_match or name_score >= 90) and house_match
+    else:
+        # For regular distributors:
+        # Even if store code matches, if the legal entity / brand name differs
+        # (e.g. "Люкс" vs "Перминов В.В ИП"), it must be marked as "Похожая".
+        # Exact match requires name similarity >= 95 and same full house.
+        is_exact = (name_score >= NAME_EXACT_THRESHOLD) and house_match
+
     return score, is_exact
 
 
@@ -152,13 +161,7 @@ class OutletsDeduplicator:
                 if score >= NAME_SIMILAR_THRESHOLD and score > best_score:
                     best_score = score
                     best_master_idx = m_idx
-
-                    # Determine status
-                    if d_rec.is_national:
-                        # For national networks matching their store/code: mark as identical
-                        best_status = STATUS_IDENTICAL if (score >= NAME_SIMILAR_THRESHOLD) else STATUS_SIMILAR
-                    else:
-                        best_status = STATUS_IDENTICAL if is_exact else STATUS_SIMILAR
+                    best_status = STATUS_IDENTICAL if is_exact else STATUS_SIMILAR
 
             if best_master_idx is not None:
                 master_matches[best_master_idx].append((d_rec, best_status))
@@ -171,7 +174,7 @@ class OutletsDeduplicator:
             for key in d_rec.blocking_keys:
                 dist_index[key].append(u_idx)
 
-        dist_groups: List[Tuple[str, List[OutletRecord]]] = []
+        dist_groups: List[List[Tuple[OutletRecord, str]]] = []
         visited_dist_indices = set()
 
         for u_idx, d_rec in enumerate(unmatched_distrib):
@@ -179,8 +182,7 @@ class OutletsDeduplicator:
                 continue
 
             visited_dist_indices.add(u_idx)
-            current_group = [d_rec]
-            group_has_similar = False
+            current_group: List[Tuple[OutletRecord, str]] = []
 
             # Find candidates
             candidates = set()
@@ -190,6 +192,7 @@ class OutletsDeduplicator:
                         if cand_idx not in visited_dist_indices:
                             candidates.add(cand_idx)
 
+            matched_cands: List[Tuple[OutletRecord, str]] = []
             for cand_idx in candidates:
                 cand_rec = unmatched_distrib[cand_idx]
 
@@ -206,15 +209,18 @@ class OutletsDeduplicator:
                 score, is_exact = calculate_outlet_match_score(d_rec, cand_rec)
                 if score >= NAME_SIMILAR_THRESHOLD:
                     visited_dist_indices.add(cand_idx)
-                    current_group.append(cand_rec)
-                    if not is_exact:
-                        group_has_similar = True
+                    cand_status = STATUS_IDENTICAL if is_exact else STATUS_SIMILAR
+                    matched_cands.append((cand_rec, cand_status))
 
-            if len(current_group) > 1:
-                group_status = STATUS_SIMILAR if group_has_similar else STATUS_IDENTICAL
-                dist_groups.append((group_status, current_group))
+            if matched_cands:
+                has_ident = any(s == STATUS_IDENTICAL for _, s in matched_cands)
+                main_status = STATUS_IDENTICAL if has_ident else STATUS_SIMILAR
+                current_group.append((d_rec, main_status))
+                current_group.extend(matched_cands)
+                dist_groups.append(current_group)
             else:
-                dist_groups.append((STATUS_UNIQUE, current_group))
+                current_group.append((d_rec, STATUS_UNIQUE))
+                dist_groups.append(current_group)
 
         # Step 4: Build final ordered output list
         output_rows: List[Tuple[int, str, tuple]] = []
@@ -224,22 +230,25 @@ class OutletsDeduplicator:
         # (Master records with no distributor matches are EXCLUDED per requirements)
         for m_idx, d_matches in master_matches.items():
             m_rec = self.master_records[m_idx]
-            # If any match in group is similar, overall group status reflects confidence
-            has_similar = any(status == STATUS_SIMILAR for _, status in d_matches)
-            group_status = STATUS_SIMILAR if has_similar else STATUS_IDENTICAL
+
+            # Master outlet status: "Одинаковая" if at least one distributor point matches identically,
+            # otherwise "Похожая"
+            has_identical = any(status == STATUS_IDENTICAL for _, status in d_matches)
+            master_status = STATUS_IDENTICAL if has_identical else STATUS_SIMILAR
 
             # Master outlet first
-            output_rows.append((current_final_id, group_status, m_rec.raw_row))
-            # Matched distributor outlets
-            for d_rec, _ in d_matches:
-                output_rows.append((current_final_id, group_status, d_rec.raw_row))
+            output_rows.append((current_final_id, master_status, m_rec.raw_row))
+
+            # Matched distributor outlets with their individual statuses
+            for d_rec, dist_status in d_matches:
+                output_rows.append((current_final_id, dist_status, d_rec.raw_row))
 
             current_final_id += 1
 
         # 4b: Distributor-only groups (both multi-record and unique)
-        for group_status, d_group in dist_groups:
-            for d_rec in d_group:
-                output_rows.append((current_final_id, group_status, d_rec.raw_row))
+        for d_group in dist_groups:
+            for d_rec, dist_status in d_group:
+                output_rows.append((current_final_id, dist_status, d_rec.raw_row))
             current_final_id += 1
 
         return output_rows
