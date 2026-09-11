@@ -14,6 +14,7 @@ from config import (
 )
 from normalizer import (
     extract_address_details,
+    extract_house_components,
     get_address_blocking_keys,
     extract_store_code,
     clean_store_name,
@@ -54,16 +55,39 @@ class OutletRecord:
         self.distributor = str(raw_row[col_indices['Дистрибьютор']]).strip()
         self.is_national = self.distributor in NATIONAL_NETWORKS
 
-        # Pre-extracted features
+        # Pre-extracted features from primary address
         base_h, full_h, city, street_tokens = extract_address_details(self.address)
         self.base_house = base_h
         self.full_house = full_h
         self.city = city
         self.street_tokens = street_tokens
 
+        # Fallback to Street column if available and primary address was incomplete
+        if 'Street' in col_indices:
+            street_col = str(raw_row[col_indices['Street']]).strip()
+            if street_col and street_col != "None":
+                if self.base_house == "б/н":
+                    st_base, st_full = extract_house_components(street_col)
+                    if st_base != "б/н":
+                        self.base_house = st_base
+                        self.full_house = st_full
+                if not self.street_tokens or not self.city:
+                    _, _, st_city, st_tokens = extract_address_details(street_col)
+                    if not self.city and st_city:
+                        self.city = st_city
+                    if not self.street_tokens and st_tokens:
+                        self.street_tokens = st_tokens
+
         self.store_code = extract_store_code(self.name)
         self.clean_name = clean_store_name(self.name)
-        self.blocking_keys = get_address_blocking_keys(self.address, self.name)
+        self.blocking_keys = get_address_blocking_keys(
+            raw_addr=self.address,
+            store_name=self.name,
+            base_house=self.base_house,
+            city=self.city,
+            street_tokens=self.street_tokens,
+            store_code=self.store_code,
+        )
 
 
 def calculate_outlet_match_score(

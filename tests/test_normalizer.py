@@ -10,6 +10,11 @@ def test_house_extraction():
     assert extract_house_components("Татищева бульвар, 6а")[1] == "6а"
     assert extract_house_components("Братьев Радченко улица, 33\\19")[1] == "33/19"
     assert extract_house_components("Заводской проезд зд.7 к.4")[1] == "7к4"
+    assert extract_house_components("Москва г, Академика Волгина ул, 15, к 3") == ("15", "15к3")
+    assert extract_house_components("5268 ССИВ Москва г, ул Академика Волгина, д.15,к.3") == ("15", "15к3")
+    assert extract_house_components("Москва г, Долгопрудная аллея, 15, к 4") == ("15", "15к4")
+    assert extract_house_components("5282 ССИВ Москва г, аллея Долгопрудная, д.15, к. 4") == ("15", "15к4")
+    assert extract_house_components("Московская обл, Наро-Фоминск г, Пожитково д, 30, стр 1") == ("30", "30к1")
 
 def test_store_code_extraction():
     assert extract_store_code("Дискаунтер_H085") == "H085"

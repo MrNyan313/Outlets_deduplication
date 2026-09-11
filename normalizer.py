@@ -1,7 +1,7 @@
 """Address and store name normalization module."""
 
 import re
-from typing import Tuple, List, Set
+from typing import Tuple, List, Set, Optional
 
 # Organizational legal forms and generic chain words to remove from store names
 LEGAL_FORMS = {
@@ -61,6 +61,7 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     e.g. 'дом № 5а' -> ('5', '5а')
          'зд.7 к.4' -> ('7', '7к4')
          '15 стр 3' -> ('15', '15к3')
+         '15, к 3' -> ('15', '15к3')
          '33\\19' -> ('33', '33/19')
          'б\\н' or no house -> ('б/н', 'б/н')
     """
@@ -78,9 +79,12 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     # Cut off interior unit info (apartment, office, room)
     t = re.split(r'\b(?:кв|квартира|пом|помещение|комн|оф|офис|эт|этаж)\b', t)[0].strip()
 
-    # 1. House with korpus/building: e.g. "15 стр 3", "д. 15 корп 2", "зд. 7 к. 4"
+    # 1. House with korpus/building/stroenie: e.g. "15, к 3", "д.15,к.3", "15 стр 3", "д. 15 корп 2", "зд. 7 к. 4"
     m1 = re.search(
-        r'(?:(?:дом|д|зд|здание)\.?\s*(?:№\s*)?)?(\d+)\s*([а-яa-z])?(?:\s*[/\\-]\s*(\d+[а-яa-z]?))?\s*(?:к|корп|корпус|стр|строение|п|лит|литера)\.?\s*(\d+[а-яa-z]?)',
+        r'(?:(?:дом|д|зд|здание)\.?\s*(?:№\s*)?)?'
+        r'(\d+)\s*([а-яa-z])?(?:\s*[/\\-]\s*(\d+[а-яa-z]?))?'
+        r'(?:[,\s/\\-]+|(?<=\d))'
+        r'(?:к|корп|корпус|стр|строение|п|лит|литера)\.?\s*(\d+[а-яa-z]?)',
         t
     )
     if m1:
@@ -95,8 +99,12 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
             full += 'к' + korp
         return base_num, full
 
-    # 2. Explicit marker: дом, д., зд., здание
-    m2 = re.search(r'\b(?:дом|д|зд|здание)\.?\s*(?:№\s*)?(\d+)\s*([а-яa-z])?(?:\s*[/\\-]\s*(\d+[а-яa-z]?))?', t)
+    # 2. Explicit marker: дом, д., зд., здание, вл, влд, владение, уч, участок
+    m2 = re.search(
+        r'\b(?:дом|д|зд|здание|вл|влд|владение|уч|участок)\.?\s*(?:№\s*)?'
+        r'(\d+)\s*([а-яa-z])?(?:\s*[/\\-]\s*(\d+[а-яa-z]?))?',
+        t
+    )
     if m2:
         base_num = m2.group(1)
         lit = m2.group(2) or ''
@@ -106,8 +114,8 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
             full += '/' + slash
         return base_num, full
 
-    # 3. корпус / строение directly followed by number
-    m3 = re.search(r'\b(?:корпус\s*строение|строение|корпус|корп|стр)\.?\s*(?:№\s*)?(\d+)\s*([а-яa-z])?', t)
+    # 3. корпус / строение directly followed by number (standalone, e.g. "стр 15", "к514")
+    m3 = re.search(r'\b(?:корпус\s*строение|строение|корпус|корп|стр|к)\.?\s*(?:№\s*)?(\d+)\s*([а-яa-z])?', t)
     if m3:
         base_num = m3.group(1)
         lit = m3.group(2) or ''
@@ -253,25 +261,40 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     return base_house, full_house, city, street_words
 
 
-def get_address_blocking_keys(raw_addr: str, store_name: str = "") -> List[Tuple[str, str]]:
+def get_address_blocking_keys(
+    raw_addr: str = "",
+    store_name: str = "",
+    base_house: Optional[str] = None,
+    city: Optional[str] = None,
+    street_tokens: Optional[List[str]] = None,
+    store_code: Optional[str] = None,
+) -> List[Tuple[str, str]]:
     """
     Generates multi-pass blocking keys for candidate retrieval.
     All keys are geographically anchored to prevent cross-region false matches.
+    Can use pre-extracted features or extract them on the fly from raw_addr.
     """
-    base_house, full_house, city, street_tokens = extract_address_details(raw_addr)
+    if base_house is None or city is None or street_tokens is None:
+        b_h, _, c, s_tokens = extract_address_details(raw_addr)
+        base_house = base_house if base_house is not None else b_h
+        city = city if city is not None else c
+        street_tokens = street_tokens if street_tokens is not None else s_tokens
+
     if not base_house:
         base_house = "б/н"
 
     keys = []
     city_token = city.split()[0] if city else ""
 
+    if not store_code and store_name:
+        store_code = extract_store_code(store_name)
+
     # Geographically anchored code keys (city + code or street + code)
-    code = extract_store_code(store_name)
-    if code:
+    if store_code:
         if city_token:
-            keys.append((f"{city_token}_code_{code}", "code"))
+            keys.append((f"{city_token}_code_{store_code}", "code"))
         for st in street_tokens[:2]:
-            keys.append((f"{st}_code_{code}", "code"))
+            keys.append((f"{st}_code_{store_code}", "code"))
 
     # Street and city keys with house number
     if city_token:

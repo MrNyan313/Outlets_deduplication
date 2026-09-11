@@ -256,5 +256,69 @@ def test_same_house_number_different_streets_never_merge():
     assert results[1][1] == STATUS_UNIQUE
 
 
+def test_ssiv_stores_match_with_master_coverage_points():
+    """
+    Distributor stores for 'СОЮЗ СВ. ИОАННА ВОИНА ООО' (e.g. 5268 and 5282)
+    must match with their corresponding master coverage points, while remaining in
+    distinct groups from each other.
+    """
+    r_dist_5268 = make_row(
+        1314, "5268", "5268 ССИВ Москва г, ул Академика Волгина, д.15,к.3", 0,
+        dist="СОЮЗ СВ. ИОАННА ВОИНА ООО (take-off) с 01.04.2018"
+    )
+    r_mast_5268 = make_row(
+        476912, "5268", "Москва г, Академика Волгина ул, 15, к 3", 1,
+        dist="Сплат?Глобал"
+    )
+    r_dist_5282 = make_row(
+        1327, "5282", "5282 ССИВ Москва г, аллея Долгопрудная, д.15, к. 4", 0,
+        dist="СОЮЗ СВ. ИОАННА ВОИНА ООО (take-off) с 01.04.2018"
+    )
+    r_mast_5282 = make_row(
+        476963, "5282", "Москва г, Долгопрудная аллея, 15, к 4", 1,
+        dist="Сплат?Глобал"
+    )
+
+    records = [
+        OutletRecord(0, r_dist_5268, COL_INDICES),
+        OutletRecord(1, r_mast_5268, COL_INDICES),
+        OutletRecord(2, r_dist_5282, COL_INDICES),
+        OutletRecord(3, r_mast_5282, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
+
+    assert len(results) == 4
+
+    # Find rows for 5268 and 5282
+    group_5268 = [r for r in results if r[2][COL_INDICES['Name']] == "5268"]
+    group_5282 = [r for r in results if r[2][COL_INDICES['Name']] == "5282"]
+
+    assert len(group_5268) == 2
+    assert len(group_5282) == 2
+
+    # Group 5268 checks
+    id_5268_1, status_5268_1, row_5268_1 = group_5268[0]
+    id_5268_2, status_5268_2, row_5268_2 = group_5268[1]
+    assert id_5268_1 == id_5268_2
+    assert status_5268_1 == STATUS_IDENTICAL
+    assert status_5268_2 == STATUS_IDENTICAL
+    assert row_5268_1[COL_INDICES['IsVendor']] == "1"
+    assert row_5268_2[COL_INDICES['IsVendor']] == "0"
+
+    # Group 5282 checks
+    id_5282_1, status_5282_1, row_5282_1 = group_5282[0]
+    id_5282_2, status_5282_2, row_5282_2 = group_5282[1]
+    assert id_5282_1 == id_5282_2
+    assert status_5282_1 == STATUS_IDENTICAL
+    assert status_5282_2 == STATUS_IDENTICAL
+    assert row_5282_1[COL_INDICES['IsVendor']] == "1"
+    assert row_5282_2[COL_INDICES['IsVendor']] == "0"
+
+    # Different groups
+    assert id_5268_1 != id_5282_1
+
+
+
 
 
