@@ -76,6 +76,9 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     # Remove 6-digit postal code
     t = re.sub(r'\b\d{6}\b', '', t)
 
+    # Strip trailing annotations in parentheses like "(А)", "(К)", "(пом. 3)"
+    t = re.sub(r'[\s,]*\([а-яa-z0-9\s\.\-]+\)\s*$', '', t).strip()
+
     # Cut off interior unit info (apartment, office, room)
     t = re.split(r'\b(?:кв|квартира|пом|помещение|комн|оф|офис|эт|этаж)\b', t)[0].strip()
 
@@ -211,6 +214,8 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     Returns: (base_house, full_house, city, street_tokens)
     """
     t = normalize_text(raw_addr)
+    # Strip trailing annotations in parentheses
+    t = re.sub(r'[\s,]*\([а-яa-z0-9\s\.\-]+\)\s*$', '', t).strip()
     base_house, full_house = extract_house_components(t)
 
     # Clean address from postal code and house

@@ -23,6 +23,11 @@ NATIONAL_NETWORKS = {
     "ТАНДЕР АО (take-off) с 01.04.2018",
 }
 
+# Distributors that require strictly identical subnetwork ("Подсеть")
+STRICT_SUBNETWORK_DISTRIBUTORS = {
+    "ТАНДЕР АО (take-off) с 01.04.2018",
+}
+
 # Status strings
 STATUS_IDENTICAL = "Одинаковая"
 STATUS_SIMILAR = "Похожая"

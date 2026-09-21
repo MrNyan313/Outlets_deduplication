@@ -19,7 +19,7 @@ COL_INDICES = {
 }
 
 
-def make_row(id_val, name, addr, is_vendor, dist="Сладкая жизнь плюс ООО"):
+def make_row(id_val, name, addr, is_vendor, dist="Сладкая жизнь плюс ООО", subnetwork="Ru_Test"):
     return (
         str(id_val),
         name,
@@ -27,7 +27,7 @@ def make_row(id_val, name, addr, is_vendor, dist="Сладкая жизнь пл
         addr,
         "Россия, " + addr,
         str(is_vendor),
-        "Ru_Test",
+        subnetwork,
         "MD",
         "food",
         dist,
@@ -341,6 +341,28 @@ def test_ssiv_stores_match_with_master_coverage_points():
     assert id_5268_1 != id_5282_1
 
 
+def test_tander_strict_subnetwork_isolation():
+    """
+    For 'ТАНДЕР АО (take-off) с 01.04.2018', outlets with different 'Подсеть'
+    (e.g. Ru_Магнит vs Ru_Аптека Магнит) must NEVER merge.
+    """
+    # Master point has Ru_Магнит
+    r_master = make_row(
+        281475778144109, "Аптека Санья", "Коми, Ухта г, Комсомольская пл, 8/12", 1,
+        dist="Сплат?Глобал", subnetwork="Ru_Магнит"
+    )
+    # Distributor point has Ru_Аптека Магнит
+    r_dist = make_row(
+        166633189115438379, "Аптека Санья", "Коми, Ухта г, Комсомольская пл, 8/12", 0,
+        dist="ТАНДЕР АО (take-off) с 01.04.2018", subnetwork="Ru_Аптека Магнит"
+    )
 
+    records = [OutletRecord(0, r_master, COL_INDICES), OutletRecord(1, r_dist, COL_INDICES)]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
 
-
+    # The master record with no matches is excluded.
+    # The distributor record is UNIQUE.
+    assert len(results) == 1
+    assert results[0][2][COL_INDICES['id']] == "166633189115438379"
+    assert results[0][1] == STATUS_UNIQUE

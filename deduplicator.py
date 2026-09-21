@@ -6,6 +6,7 @@ from rapidfuzz import fuzz
 
 from config import (
     NATIONAL_NETWORKS,
+    STRICT_SUBNETWORK_DISTRIBUTORS,
     STATUS_IDENTICAL,
     STATUS_SIMILAR,
     STATUS_UNIQUE,
@@ -18,6 +19,7 @@ from normalizer import (
     get_address_blocking_keys,
     extract_store_code,
     clean_store_name,
+    normalize_text,
 )
 
 
@@ -31,6 +33,7 @@ class OutletRecord:
         'address',
         'is_vendor',
         'distributor',
+        'subnetwork',
         'base_house',
         'full_house',
         'city',
@@ -54,6 +57,12 @@ class OutletRecord:
 
         self.distributor = str(raw_row[col_indices['Дистрибьютор']]).strip()
         self.is_national = self.distributor in NATIONAL_NETWORKS
+
+        if 'Подсеть' in col_indices:
+            sub_val = raw_row[col_indices['Подсеть']]
+            self.subnetwork = str(sub_val).strip() if (sub_val is not None and str(sub_val) != 'None') else ""
+        else:
+            self.subnetwork = ""
 
         # Pre-extracted features from primary address
         base_h, full_h, city, street_tokens = extract_address_details(self.address)
@@ -98,6 +107,17 @@ def calculate_outlet_match_score(
     Calculates similarity between two outlets at the same address.
     Returns: (score, is_exact_match)
     """
+    # 0. STRICT SUBNETWORK RULE: For distributors with strict subnetwork isolation (e.g. ТАНДЕР),
+    # subnetwork values ("Подсеть") must be non-empty and identical!
+    if (
+        outlet1.distributor in STRICT_SUBNETWORK_DISTRIBUTORS
+        or outlet2.distributor in STRICT_SUBNETWORK_DISTRIBUTORS
+    ):
+        s1 = normalize_text(outlet1.subnetwork)
+        s2 = normalize_text(outlet2.subnetwork)
+        if not s1 or not s2 or s1 != s2:
+            return 0.0, False
+
     # 1. HARD RULE: If both outlets have store codes and they CONFLICT, they are different stores!
     if outlet1.store_code and outlet2.store_code and outlet1.store_code != outlet2.store_code:
         return 0.0, False
