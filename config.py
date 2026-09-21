@@ -9,8 +9,10 @@ RESULTS_DIR = PROJECT_ROOT / "Results"
 
 # National retail network distributors that must be matched in isolation
 NATIONAL_NETWORKS = {
+    "Атак take off c 01.01.2019",
     "АШАН ООО (take-off) с 01.04.2018",
     "ГИПЕРГЛОБУС ООО (take-off)",
+    "ДЕТСКИЙ МИР ПАО",
     "Дикси Юг АО (take-off) с 01.04.2018",
     "Лента ООО (take-off) с 01.04.2018",
     "МЕТРО КЭШ ЭНД КЕРРИ ООО (take-off) с 01.04.2018",

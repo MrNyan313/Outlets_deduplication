@@ -90,6 +90,28 @@ def test_national_network_isolation_between_competitors():
     assert results[0][0] != results[1][0]  # Different group IDs
 
 
+def test_new_national_networks_isolation():
+    """Verify that 'ДЕТСКИЙ МИР ПАО' and 'Атак take off c 01.01.2019' are recognized as national networks."""
+    r_dm = make_row(1, "Детский мир", "г. Москва, ул. Ленина, 10", 0, "ДЕТСКИЙ МИР ПАО")
+    r_atak = make_row(2, "Атак", "г. Москва, ул. Ленина, 10", 0, "Атак take off c 01.01.2019")
+    r_reg = make_row(3, "Магазин", "г. Москва, ул. Ленина, 10", 0, "Сладкая жизнь плюс ООО")
+
+    rec_dm = OutletRecord(0, r_dm, COL_INDICES)
+    rec_atak = OutletRecord(1, r_atak, COL_INDICES)
+    rec_reg = OutletRecord(2, r_reg, COL_INDICES)
+
+    assert rec_dm.is_national is True
+    assert rec_atak.is_national is True
+    assert rec_reg.is_national is False
+
+    dedup = OutletsDeduplicator([rec_dm, rec_atak, rec_reg])
+    results = dedup.run()
+
+    # None of the 3 should merge into the same group
+    group_ids = {res[0] for res in results}
+    assert len(group_ids) == 3
+
+
 def test_regular_distributors_can_merge():
     """Different regular distributors delivering to the same store can merge."""
     r_dist1 = make_row(1, "Продукты Малинка №604", "г. Бор, Заводская ул, д. 5а", 0, "Сладкая жизнь плюс ООО")
