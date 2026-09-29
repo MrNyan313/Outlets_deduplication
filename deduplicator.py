@@ -7,6 +7,7 @@ from rapidfuzz import fuzz
 from config import (
     NATIONAL_NETWORKS,
     STRICT_SUBNETWORK_DISTRIBUTORS,
+    CODE_BASED_NETWORKS,
     STATUS_IDENTICAL,
     STATUS_SIMILAR,
     STATUS_UNIQUE,
@@ -89,14 +90,51 @@ class OutletRecord:
 
         self.store_code = extract_store_code(self.name)
         self.clean_name = clean_store_name(self.name)
-        self.blocking_keys = get_address_blocking_keys(
-            raw_addr=self.address,
-            store_name=self.name,
-            base_house=self.base_house,
-            city=self.city,
-            street_tokens=self.street_tokens,
-            store_code=self.store_code,
-        )
+
+        if self.distributor in CODE_BASED_NETWORKS:
+            # Code-based networks only match by store code!
+            if self.store_code:
+                self.blocking_keys = [(f"code_{self.distributor}_{self.store_code}", "code")]
+            else:
+                self.blocking_keys = []
+        elif self.distributor in STRICT_SUBNETWORK_DISTRIBUTORS:
+            # Tander only matches by Name + Subnetwork!
+            clean_n = normalize_text(self.name)
+            clean_sub = normalize_text(self.subnetwork)
+            if clean_n and clean_sub:
+                self.blocking_keys = [(f"tander_{self.distributor}_{clean_n}_{clean_sub}", "tander")]
+            else:
+                self.blocking_keys = []
+        elif self.is_vendor:
+            # Master coverage points can match code-based networks, Tander, or regular distributors
+            keys = []
+            if self.store_code:
+                for net in CODE_BASED_NETWORKS:
+                    keys.append((f"code_{net}_{self.store_code}", "code"))
+            clean_n = normalize_text(self.name)
+            clean_sub = normalize_text(self.subnetwork)
+            if clean_n and clean_sub:
+                for dist in STRICT_SUBNETWORK_DISTRIBUTORS:
+                    keys.append((f"tander_{dist}_{clean_n}_{clean_sub}", "tander"))
+            keys.extend(get_address_blocking_keys(
+                raw_addr=self.address,
+                store_name=self.name,
+                base_house=self.base_house,
+                city=self.city,
+                street_tokens=self.street_tokens,
+                store_code=self.store_code,
+            ))
+            self.blocking_keys = keys
+        else:
+            # Regular distributor outlets
+            self.blocking_keys = get_address_blocking_keys(
+                raw_addr=self.address,
+                store_name=self.name,
+                base_house=self.base_house,
+                city=self.city,
+                street_tokens=self.street_tokens,
+                store_code=self.store_code,
+            )
 
 
 def calculate_outlet_match_score(
@@ -104,21 +142,40 @@ def calculate_outlet_match_score(
     outlet2: OutletRecord
 ) -> Tuple[float, bool]:
     """
-    Calculates similarity between two outlets at the same address.
+    Calculates similarity between two outlets.
     Returns: (score, is_exact_match)
     """
-    # 0. STRICT SUBNETWORK RULE: For distributors with strict subnetwork isolation (e.g. ТАНДЕР),
-    # subnetwork values ("Подсеть") must be non-empty and identical!
+    # 0. STRICT NAME + SUBNETWORK RULE for ТАНДЕР
+    # For ТАНДЕР АО, outlets match IF AND ONLY IF both Name and Подсеть match identically!
     if (
         outlet1.distributor in STRICT_SUBNETWORK_DISTRIBUTORS
         or outlet2.distributor in STRICT_SUBNETWORK_DISTRIBUTORS
     ):
+        if not outlet1.is_vendor and not outlet2.is_vendor and outlet1.distributor != outlet2.distributor:
+            return 0.0, False
+        n1 = normalize_text(outlet1.name)
+        n2 = normalize_text(outlet2.name)
         s1 = normalize_text(outlet1.subnetwork)
         s2 = normalize_text(outlet2.subnetwork)
-        if not s1 or not s2 or s1 != s2:
-            return 0.0, False
+        if n1 and s1 and n1 == n2 and s1 == s2:
+            return 100.0, True
+        return 0.0, False
 
-    # 1. HARD RULE: If both outlets have store codes and they CONFLICT, they are different stores!
+    # 1. CODE-BASED NETWORKS RULE (Атак, Пятёрочка, СОЮЗ СВ. ИОАННА ВОИНА)
+    # Outlets match IF AND ONLY IF store codes match identically!
+    if (
+        outlet1.distributor in CODE_BASED_NETWORKS
+        or outlet2.distributor in CODE_BASED_NETWORKS
+    ):
+        if not outlet1.is_vendor and not outlet2.is_vendor and outlet1.distributor != outlet2.distributor:
+            return 0.0, False
+        c1 = outlet1.store_code
+        c2 = outlet2.store_code
+        if c1 and c2 and c1 == c2:
+            return 100.0, True
+        return 0.0, False
+
+    # 2. HARD RULE for other networks: If both outlets have store codes and they CONFLICT, they are different!
     if outlet1.store_code and outlet2.store_code and outlet1.store_code != outlet2.store_code:
         return 0.0, False
 
@@ -202,10 +259,12 @@ class OutletsDeduplicator:
             else:
                 self.distrib_records.append(r)
 
-    def run(self) -> List[Tuple[int, str, tuple]]:
+    def run(self, include_similarity: bool = False) -> List[Tuple[Any, ...]]:
         """
         Runs the full deduplication pipeline.
-        Returns a list of output tuples: (Итоговый ID, Статус, raw_row)
+        Returns a list of output tuples:
+          - If include_similarity is False: (Итоговый ID, Статус, raw_row)
+          - If include_similarity is True: (Итоговый ID, Статус, raw_row, Similarity_Score)
         """
         # Step 1: Index master records (IsVendor = 1)
         master_index = defaultdict(list)
@@ -214,8 +273,8 @@ class OutletsDeduplicator:
                 master_index[key].append(m_idx)
 
         # Step 2: Match distributor records against master records
-        # master_matches: maps master_record index -> list of (distrib_record, status)
-        master_matches: Dict[int, List[Tuple[OutletRecord, str]]] = defaultdict(list)
+        # master_matches: maps master_record index -> list of (distrib_record, status, score)
+        master_matches: Dict[int, List[Tuple[OutletRecord, str, float]]] = defaultdict(list)
         unmatched_distrib: List[OutletRecord] = []
 
         for d_rec in self.distrib_records:
@@ -239,7 +298,7 @@ class OutletsDeduplicator:
                     best_status = STATUS_IDENTICAL if is_exact else STATUS_SIMILAR
 
             if best_master_idx is not None:
-                master_matches[best_master_idx].append((d_rec, best_status))
+                master_matches[best_master_idx].append((d_rec, best_status, best_score))
             else:
                 unmatched_distrib.append(d_rec)
 
@@ -249,7 +308,7 @@ class OutletsDeduplicator:
             for key in d_rec.blocking_keys:
                 dist_index[key].append(u_idx)
 
-        dist_groups: List[List[Tuple[OutletRecord, str]]] = []
+        dist_groups: List[List[Tuple[OutletRecord, str, float]]] = []
         visited_dist_indices = set()
 
         for u_idx, d_rec in enumerate(unmatched_distrib):
@@ -257,7 +316,7 @@ class OutletsDeduplicator:
                 continue
 
             visited_dist_indices.add(u_idx)
-            current_group: List[Tuple[OutletRecord, str]] = []
+            current_group: List[Tuple[OutletRecord, str, float]] = []
 
             # Find candidates
             candidates = set()
@@ -267,7 +326,7 @@ class OutletsDeduplicator:
                         if cand_idx not in visited_dist_indices:
                             candidates.add(cand_idx)
 
-            matched_cands: List[Tuple[OutletRecord, str]] = []
+            matched_cands: List[Tuple[OutletRecord, str, float]] = []
             for cand_idx in candidates:
                 cand_rec = unmatched_distrib[cand_idx]
 
@@ -285,20 +344,20 @@ class OutletsDeduplicator:
                 if score >= NAME_SIMILAR_THRESHOLD:
                     visited_dist_indices.add(cand_idx)
                     cand_status = STATUS_IDENTICAL if is_exact else STATUS_SIMILAR
-                    matched_cands.append((cand_rec, cand_status))
+                    matched_cands.append((cand_rec, cand_status, score))
 
             if matched_cands:
-                has_ident = any(s == STATUS_IDENTICAL for _, s in matched_cands)
+                has_ident = any(s == STATUS_IDENTICAL for _, s, _ in matched_cands)
                 main_status = STATUS_IDENTICAL if has_ident else STATUS_SIMILAR
-                current_group.append((d_rec, main_status))
+                current_group.append((d_rec, main_status, 100.0))
                 current_group.extend(matched_cands)
                 dist_groups.append(current_group)
             else:
-                current_group.append((d_rec, STATUS_UNIQUE))
+                current_group.append((d_rec, STATUS_UNIQUE, 0.0))
                 dist_groups.append(current_group)
 
         # Step 4: Build final ordered output list
-        output_rows: List[Tuple[int, str, tuple]] = []
+        output_rows: List[Tuple[Any, ...]] = []
         current_final_id = 1
 
         # 4a: Master groups that have at least one distributor match
@@ -308,22 +367,31 @@ class OutletsDeduplicator:
 
             # Master outlet status: "Одинаковая" if at least one distributor point matches identically,
             # otherwise "Похожая"
-            has_identical = any(status == STATUS_IDENTICAL for _, status in d_matches)
+            has_identical = any(status == STATUS_IDENTICAL for _, status, _ in d_matches)
             master_status = STATUS_IDENTICAL if has_identical else STATUS_SIMILAR
 
             # Master outlet first
-            output_rows.append((current_final_id, master_status, m_rec.raw_row))
-
-            # Matched distributor outlets with their individual statuses
-            for d_rec, dist_status in d_matches:
-                output_rows.append((current_final_id, dist_status, d_rec.raw_row))
+            if include_similarity:
+                output_rows.append((current_final_id, master_status, m_rec.raw_row, 100.0))
+                for d_rec, dist_status, dist_score in d_matches:
+                    output_rows.append((current_final_id, dist_status, d_rec.raw_row, dist_score))
+            else:
+                output_rows.append((current_final_id, master_status, m_rec.raw_row))
+                for d_rec, dist_status, _ in d_matches:
+                    output_rows.append((current_final_id, dist_status, d_rec.raw_row))
 
             current_final_id += 1
 
         # 4b: Distributor-only groups (both multi-record and unique)
         for d_group in dist_groups:
-            for d_rec, dist_status in d_group:
-                output_rows.append((current_final_id, dist_status, d_rec.raw_row))
+            for item in d_group:
+                d_rec = item[0]
+                dist_status = item[1]
+                dist_score = item[2]
+                if include_similarity:
+                    output_rows.append((current_final_id, dist_status, d_rec.raw_row, dist_score))
+                else:
+                    output_rows.append((current_final_id, dist_status, d_rec.raw_row))
             current_final_id += 1
 
         return output_rows

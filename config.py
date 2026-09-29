@@ -28,6 +28,13 @@ STRICT_SUBNETWORK_DISTRIBUTORS = {
     "ТАНДЕР АО (take-off) с 01.04.2018",
 }
 
+# National retail networks where matching is strictly by store code in Name
+CODE_BASED_NETWORKS = {
+    "Атак take off c 01.01.2019",
+    "ПЯТЁРОЧКА",
+    "СОЮЗ СВ. ИОАННА ВОИНА ООО (take-off) с 01.04.2018",
+}
+
 # Status strings
 STATUS_IDENTICAL = "Одинаковая"
 STATUS_SIMILAR = "Похожая"
@@ -37,5 +44,9 @@ STATUS_UNIQUE = "Уникальная"
 NAME_EXACT_THRESHOLD = 95
 NAME_SIMILAR_THRESHOLD = 68
 
+# Output options
+INCLUDE_SIMILARITY_PERCENT: bool = True
+
 # Output filename pattern
 OUTPUT_FILENAME_PATTERN = "Deduplication_results-%Y%m%d%H%M.xlsx"
+

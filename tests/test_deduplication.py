@@ -366,3 +366,156 @@ def test_tander_strict_subnetwork_isolation():
     assert len(results) == 1
     assert results[0][2][COL_INDICES['id']] == "166633189115438379"
     assert results[0][1] == STATUS_UNIQUE
+
+
+def test_atak_code_matching_rule():
+    """
+    For 'Атак take off c 01.01.2019':
+    - Outlets with identical codes match as IDENTICAL (even with different address formats).
+    - Outlets with different codes NEVER merge (even at the exact same address).
+    """
+    # Same code 548, different address formats
+    r1 = make_row(1, "Атак 548", "Московская обл, Одинцово г, Горки-10 п, 24А", 0, dist="Атак take off c 01.01.2019")
+    r2 = make_row(2, "548", "(548) GORKI", 0, dist="Атак take off c 01.01.2019")
+    # Different code 204
+    r3 = make_row(3, "Атак 204", "Московская обл, Одинцово г, Горки-10 п, 24А", 0, dist="Атак take off c 01.01.2019")
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+        OutletRecord(2, r3, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
+
+    assert len(results) == 3
+    # r1 and r2 are grouped together
+    id1, s1, row1 = results[0]
+    id2, s2, row2 = results[1]
+    id3, s3, row3 = results[2]
+
+    assert id1 == id2
+    assert s1 == STATUS_IDENTICAL
+    assert s2 == STATUS_IDENTICAL
+
+    # r3 is in a separate group
+    assert id3 != id1
+    assert s3 == STATUS_UNIQUE
+
+
+def test_pyaterochka_code_matching_rule():
+    """
+    For 'ПЯТЁРОЧКА':
+    - Outlets with identical alphanumeric codes (e.g. S088) match as IDENTICAL.
+    - Outlets with different codes NEVER merge.
+    """
+    r1 = make_row(10, "Пятерочка S088", "Московская обл. г.Москва, Масловка В.ул 4", 0, dist="ПЯТЁРОЧКА")
+    r2 = make_row(20, "Дискаунтер_S088", "Москва г, Верхняя Масловка ул, 4", 0, dist="ПЯТЁРОЧКА")
+    r3 = make_row(30, "Дискаунтер_3242", "Москва г, Верхняя Масловка ул, 4", 0, dist="ПЯТЁРОЧКА")
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+        OutletRecord(2, r3, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
+
+    assert len(results) == 3
+    assert results[0][0] == results[1][0]
+    assert results[0][1] == STATUS_IDENTICAL
+    assert results[1][1] == STATUS_IDENTICAL
+
+    assert results[2][0] != results[0][0]
+    assert results[2][1] == STATUS_UNIQUE
+
+
+def test_tander_name_and_subnetwork_matching_rule():
+    """
+    For 'ТАНДЕР АО (take-off) с 01.04.2018':
+    - Outlets match IF AND ONLY IF both Name and Подсеть match identically!
+    - If Name matches but Подсеть differs -> DO NOT MERGE.
+    - If Подсеть matches but Name differs -> DO NOT MERGE.
+    """
+    # Identical Name and Subnetwork
+    r1 = make_row(1, "Шаровница", "Московская обл, Воскресенск г, Виноградово п, стр 1", 0,
+                  dist="ТАНДЕР АО (take-off) с 01.04.2018", subnetwork="Ru_Магнит")
+    r2 = make_row(2, "Шаровница", "140230, Московская обл, Коммунистическая ул, д. 1", 0,
+                  dist="ТАНДЕР АО (take-off) с 01.04.2018", subnetwork="Ru_Магнит")
+    # Same Name, different Subnetwork
+    r3 = make_row(3, "Шаровница", "Московская обл, Воскресенск г, Виноградово п, стр 1", 0,
+                  dist="ТАНДЕР АО (take-off) с 01.04.2018", subnetwork="Ru_Магнит Косметика")
+    # Different Name, same Subnetwork
+    r4 = make_row(4, "Турома", "Московская обл, Воскресенск г, Виноградово п, стр 1", 0,
+                  dist="ТАНДЕР АО (take-off) с 01.04.2018", subnetwork="Ru_Магнит")
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+        OutletRecord(2, r3, COL_INDICES),
+        OutletRecord(3, r4, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
+
+    assert len(results) == 4
+    # r1 and r2 are merged into one group
+    assert results[0][0] == results[1][0]
+    assert results[0][1] == STATUS_IDENTICAL
+    assert results[1][1] == STATUS_IDENTICAL
+
+    # r3 and r4 are each in their own separate unique groups
+    assert results[2][0] != results[0][0]
+    assert results[3][0] != results[0][0]
+    assert results[2][0] != results[3][0]
+    assert results[2][1] == STATUS_UNIQUE
+    assert results[3][1] == STATUS_UNIQUE
+
+
+def test_similarity_percentage_option(tmp_path):
+    """
+    Test include_similarity=True:
+    - deduplicator.run returns 4-tuples with similarity scores.
+    - write_excel_results outputs 'Similarity %' as the last column.
+    """
+    from excel_handler import write_excel_results, read_excel_data
+    import openpyxl
+
+    r1 = make_row(1, "Дискаунтер_S088", "Москва г, ул. Масловка, 4", 0, dist="ПЯТЁРОЧКА")
+    r2 = make_row(2, "Пятерочка S088", "Москва г, ул. Масловка, 4", 0, dist="ПЯТЁРОЧКА")
+    r3 = make_row(3, "Пятерочка 9999", "Москва г, ул. Ленина, 10", 0, dist="ПЯТЁРОЧКА")
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+        OutletRecord(2, r3, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run(include_similarity=True)
+
+    assert len(results) == 3
+    # Check 4-tuple: (final_id, status, raw_row, sim_score)
+    assert len(results[0]) == 4
+    assert results[0][3] == 100.0
+    assert results[1][3] == 100.0
+    assert results[2][3] == 0.0
+
+    # Write to Excel and verify
+    out_file = tmp_path / "test_out.xlsx"
+    headers = list(COL_INDICES.keys())
+    write_excel_results(out_file, headers, results, include_similarity=True)
+
+    wb = openpyxl.load_workbook(out_file, data_only=True)
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+
+    # Check header
+    assert rows[0][0] == "Итоговый ID"
+    assert rows[0][1] == "Статус"
+    assert rows[0][-1] == "Similarity %"
+
+    # Check data rows: identical rows have 1.0 (100%), unique has 0.0 (0%)
+    assert rows[1][-1] == 1.0
+    assert rows[2][-1] == 1.0
+    assert rows[3][-1] == 0.0
+

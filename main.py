@@ -1,20 +1,42 @@
-"""Main entry point for Outlets Deduplication script."""
-
+import argparse
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
-from config import PROJECT_ROOT, RESULTS_DIR, OUTPUT_FILENAME_PATTERN
+from config import (
+    PROJECT_ROOT,
+    RESULTS_DIR,
+    OUTPUT_FILENAME_PATTERN,
+    INCLUDE_SIMILARITY_PERCENT,
+)
 from excel_handler import find_input_excel_file, read_excel_data, write_excel_results
 from deduplicator import OutletRecord, OutletsDeduplicator
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Outlets Deduplication - Сопоставление торговых точек")
+    parser.add_argument(
+        "--similarity",
+        dest="include_similarity",
+        action="store_true",
+        default=INCLUDE_SIMILARITY_PERCENT,
+        help="Выводить колонку 'Similarity %%' в итоговом файле Excel (по умолчанию из config.py)"
+    )
+    parser.add_argument(
+        "--no-similarity",
+        dest="include_similarity",
+        action="store_false",
+        help="НЕ выводить колонку 'Similarity %%' в итоговом файле Excel"
+    )
+    args = parser.parse_args()
+    include_similarity = args.include_similarity
+
     start_total_time = time.time()
     print("=" * 70)
     print("      Outlets Deduplication - Сопоставление торговых точек")
     print("=" * 70)
+    print(f"Опция 'Similarity %': {'ВКЛЮЧЕНА' if include_similarity else 'ВЫКЛЮЧЕНА'}")
 
     # 1. Locate input file
     print(f"\n[1/4] Поиск исходного Excel-файла в корне проекта ({PROJECT_ROOT})...")
@@ -44,7 +66,7 @@ def main():
 
     t0 = time.time()
     dedup = OutletsDeduplicator(records)
-    results = dedup.run()
+    results = dedup.run(include_similarity=include_similarity)
     dedup_time = time.time() - t0
     print(f" -> Сопоставление и группировка: {dedup_time:.2f} сек.")
     print(f" -> Сформировано итоговых строк: {len(results):,}")
@@ -52,7 +74,9 @@ def main():
     # Statistics
     status_counts = {}
     group_ids = set()
-    for final_id, status, _ in results:
+    for item in results:
+        final_id = item[0]
+        status = item[1]
         status_counts[status] = status_counts.get(status, 0) + 1
         group_ids.add(final_id)
 
@@ -69,7 +93,7 @@ def main():
     output_path = RESULTS_DIR / output_filename
 
     try:
-        write_excel_results(output_path, headers, results)
+        write_excel_results(output_path, headers, results, include_similarity=include_similarity)
         write_time = time.time() - t0
         print(f" -> Файл успешно сохранен: {output_path}")
         print(f" -> Время записи: {write_time:.2f} сек.")

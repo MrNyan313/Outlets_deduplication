@@ -159,35 +159,37 @@ def extract_store_code(name: str) -> str:
          'Малинка №604' -> '604'
          'Спар № 118' -> '118'
          'X5 2680' -> '2680'
+         'Атак 548' -> '548'
+         'Верный 2177' -> '2177'
     """
     if not name:
         return ""
-    t = str(name).strip()
+    t = str(name).strip().replace("ё", "е").replace("Ё", "Е")
 
     # 1. Number marker: № 604, №604, N 604, #604
-    m_no = re.search(r'[№N#]\s*([0-9]+[а-яa-z]?)', t, re.IGNORECASE)
+    m_no = re.search(r'[№N#]\s*([0-9a-zA-Zа-яА-Я]+)', t)
     if m_no:
-        return m_no.group(1).lower()
+        code = m_no.group(1).upper().translate(CYR_TO_LAT)
+        return code
 
-    # 2. Alphanumeric store codes: e.g. H085, E231 (letter + digits) or 304S (digits + letter)
-    m_code = re.search(r'(?:^|[^a-zA-Zа-яА-Я0-9])([a-zA-Zа-яА-Я]\d{2,5}|\d{2,5}[a-zA-Zа-яА-Я])(?:$|[^a-zA-Zа-яА-Я0-9])', t)
+    # 2. Known chain prefixes followed by store code (alphanumeric, e.g. 5181, 363H, 31Y6, HA3A, S053, 548):
+    m_pref = re.search(
+        r'\b(?:дискаунтер|гипермаркет|супермаркет|магазин|маг|тт|пятерочка|верный|атак(?:\s+ооо)?|чижик|даркстор|x5|х5)[_ ]+([0-9a-zA-Zа-яА-Я]+)\b',
+        t, re.IGNORECASE
+    )
+    if m_pref:
+        return m_pref.group(1).upper().translate(CYR_TO_LAT)
+
+    # 3. Pure code: 2 to 7 alphanumeric characters (e.g. '5268', '548', '363H', 'HA3A', '204')
+    if re.match(r'^[0-9a-zA-Zа-яА-Я]{2,7}$', t):
+        return t.upper().translate(CYR_TO_LAT)
+
+    # 4. Alphanumeric store codes in mixed text: e.g. H085, 304S, 31Y6, E231
+    m_code = re.search(r'(?:^|[^a-zA-Zа-яА-Я0-9])([a-zA-Zа-яА-Я0-9]{3,6})(?:$|[^a-zA-Zа-яА-Я0-9])', t)
     if m_code:
-        code = m_code.group(1).upper()
-        return code.translate(CYR_TO_LAT)
-
-    # 3. X5 store number: "X5 2680" or "Х5 2680"
-    m_x5 = re.search(r'\b(?:x5|х5)\s*(\d{2,5})\b', t, re.IGNORECASE)
-    if m_x5:
-        return m_x5.group(1)
-
-    # 4. Chain prefix followed by number: e.g. "Дискаунтер_5181", "Дискаунтер_5268"
-    m_chain_num = re.search(r'\b(?:дискаунтер|гипермаркет|супермаркет|магазин|маг|тт)[_ ]+(\d{2,6})\b', t, re.IGNORECASE)
-    if m_chain_num:
-        return m_chain_num.group(1)
-
-    # 5. Pure numeric store name / code: e.g. "5268", "5282", "2111"
-    if re.match(r'^\d{2,6}$', t.strip()):
-        return t.strip()
+        code = m_code.group(1).upper().translate(CYR_TO_LAT)
+        if any(c.isdigit() for c in code):
+            return code
 
     return ""
 

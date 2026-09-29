@@ -53,6 +53,11 @@ def read_excel_data(file_path: Path) -> Tuple[List[str], List[tuple], Dict[str, 
 
     raw_headers = [str(h) if h is not None else "" for h in header_tuple]
 
+    # Strip trailing empty headers
+    while raw_headers and not raw_headers[-1].strip():
+        raw_headers.pop()
+    num_cols = len(raw_headers)
+
     # Map normalized header names to index
     col_indices: Dict[str, int] = {}
     for idx, h in enumerate(raw_headers):
@@ -70,7 +75,7 @@ def read_excel_data(file_path: Path) -> Tuple[List[str], List[tuple], Dict[str, 
 
     rows: List[tuple] = []
     for row in row_iterator:
-        rows.append(row)
+        rows.append(row[:num_cols])
 
     wb.close()
     return raw_headers, rows, col_indices
@@ -79,11 +84,13 @@ def read_excel_data(file_path: Path) -> Tuple[List[str], List[tuple], Dict[str, 
 def write_excel_results(
     output_path: Path,
     original_headers: List[str],
-    results: List[Tuple[int, str, tuple]]
+    results: List[Any],
+    include_similarity: bool = False
 ) -> None:
     """
     Writes deduplication results using xlsxwriter in constant_memory mode.
     Prepends 'Итоговый ID' and 'Статус' as the first two columns.
+    Appends 'Similarity %' as the last column if include_similarity is True.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -97,12 +104,29 @@ def write_excel_results(
         'border': 1
     })
 
+    pct_format = workbook.add_format({
+        'num_format': '0%',
+        'align': 'right'
+    })
+
     full_headers = ['Итоговый ID', 'Статус'] + list(original_headers)
+    if include_similarity:
+        full_headers.append('Similarity %')
+
     for col_num, header_name in enumerate(full_headers):
         worksheet.write(0, col_num, header_name, header_format)
 
     # Write data rows
-    for row_num, (final_id, status, original_row) in enumerate(results, start=1):
+    sim_col_idx = len(full_headers) - 1
+    for row_num, item in enumerate(results, start=1):
+        final_id = item[0]
+        status = item[1]
+        original_row = item[2]
+        sim_val = (
+            item[3] if len(item) > 3
+            else (100.0 if status == "Одинаковая" else (0.0 if status == "Уникальная" else 70.0))
+        )
+
         worksheet.write(row_num, 0, final_id)
         worksheet.write(row_num, 1, status)
         for col_num, cell_val in enumerate(original_row, start=2):
@@ -112,5 +136,8 @@ def write_excel_results(
                 worksheet.write_number(row_num, col_num, cell_val)
             else:
                 worksheet.write_string(row_num, col_num, str(cell_val))
+
+        if include_similarity:
+            worksheet.write_number(row_num, sim_col_idx, sim_val / 100.0, pct_format)
 
     workbook.close()

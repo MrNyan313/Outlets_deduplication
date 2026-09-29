@@ -22,6 +22,13 @@ def test_store_code_extraction():
     assert extract_store_code("Люкс ООО маг.Малинка №604") == "604"
     assert extract_store_code("Перминов В.В ИП маг.Малинка № 604") == "604"
     assert extract_store_code("Спар №118") == "118"
+    assert extract_store_code("Атак 548") == "548"
+    assert extract_store_code("АТАК ООО 465") == "465"
+    assert extract_store_code("Верный 2177") == "2177"
+    assert extract_store_code("Пятёрочка 7242") == "7242"
+    assert extract_store_code("Дискаунтер_31Y6") == "31Y6"
+    assert extract_store_code("Дискаунтер_HA3A") == "HA3A"
+    assert extract_store_code("5268") == "5268"
 
 def test_clean_store_name():
     assert "малинка 604" in clean_store_name("Люкс ООО маг.Малинка №604")
