@@ -7,6 +7,7 @@ from rapidfuzz import fuzz
 from config import (
     NATIONAL_NETWORKS,
     STRICT_SUBNETWORK_DISTRIBUTORS,
+    CODE_AND_SUBNETWORK_DISTRIBUTORS,
     CODE_BASED_NETWORKS,
     PAD_3DIGIT_CODE_NETWORKS,
     STATUS_IDENTICAL,
@@ -98,8 +99,15 @@ class OutletRecord:
                 self.blocking_keys = [(f"code_{self.distributor}_{self.store_code}", "code")]
             else:
                 self.blocking_keys = []
+        elif self.distributor in CODE_AND_SUBNETWORK_DISTRIBUTORS:
+            # Matches strictly by Store Code + Subnetwork (e.g. Перекресток)
+            clean_sub = normalize_text(self.subnetwork)
+            if self.store_code and clean_sub:
+                self.blocking_keys = [(f"code_sub_{self.distributor}_{self.store_code}_{clean_sub}", "code_sub")]
+            else:
+                self.blocking_keys = []
         elif self.distributor in STRICT_SUBNETWORK_DISTRIBUTORS:
-            # Strict Name + Subnetwork distributors (Тандер, Перекресток)
+            # Strict Name + Subnetwork distributors (Тандер)
             clean_n = normalize_text(self.name)
             clean_sub = normalize_text(self.subnetwork)
             if clean_n and clean_sub:
@@ -107,7 +115,7 @@ class OutletRecord:
             else:
                 self.blocking_keys = []
         elif self.is_vendor:
-            # Master coverage points can match code-based networks, strict subnetwork networks, or regular distributors
+            # Master coverage points can match code-based networks, code+subnetwork networks, strict subnetwork networks, or regular distributors
             keys = []
             if self.store_code:
                 for net in CODE_BASED_NETWORKS:
@@ -115,8 +123,11 @@ class OutletRecord:
                     if net in PAD_3DIGIT_CODE_NETWORKS and c.isdigit() and len(c) in (1, 2):
                         c = c.zfill(3)
                     keys.append((f"code_{net}_{c}", "code"))
-            clean_n = normalize_text(self.name)
             clean_sub = normalize_text(self.subnetwork)
+            if self.store_code and clean_sub:
+                for dist in CODE_AND_SUBNETWORK_DISTRIBUTORS:
+                    keys.append((f"code_sub_{dist}_{self.store_code}_{clean_sub}", "code_sub"))
+            clean_n = normalize_text(self.name)
             if clean_n and clean_sub:
                 for dist in STRICT_SUBNETWORK_DISTRIBUTORS:
                     keys.append((f"strict_sub_{dist}_{clean_n}_{clean_sub}", "strict_sub"))
@@ -149,7 +160,7 @@ def calculate_outlet_match_score(
     Calculates similarity between two outlets.
     Returns: (score, is_exact_match)
     """
-    # 0. STRICT NAME + SUBNETWORK RULE for STRICT_SUBNETWORK_DISTRIBUTORS (ТАНДЕР, ПЕРЕКРЕСТОК)
+    # 0. STRICT NAME + SUBNETWORK RULE for STRICT_SUBNETWORK_DISTRIBUTORS (ТАНДЕР)
     # Outlets match IF AND ONLY IF both Name and Подсеть match identically!
     if (
         outlet1.distributor in STRICT_SUBNETWORK_DISTRIBUTORS
@@ -165,7 +176,23 @@ def calculate_outlet_match_score(
             return 100.0, True
         return 0.0, False
 
-    # 1. CODE-BASED NETWORKS RULE (Атак, Ашан, Дикси, Лента, Метро, Пятёрочка, СОЮЗ СВ. ИОАННА ВОИНА)
+    # 1. CODE + SUBNETWORK RULE for CODE_AND_SUBNETWORK_DISTRIBUTORS (ПЕРЕКРЕСТОК)
+    # Outlets match IF AND ONLY IF both Store Code and Подсеть match identically!
+    if (
+        outlet1.distributor in CODE_AND_SUBNETWORK_DISTRIBUTORS
+        or outlet2.distributor in CODE_AND_SUBNETWORK_DISTRIBUTORS
+    ):
+        if not outlet1.is_vendor and not outlet2.is_vendor and outlet1.distributor != outlet2.distributor:
+            return 0.0, False
+        c1 = outlet1.store_code
+        c2 = outlet2.store_code
+        s1 = normalize_text(outlet1.subnetwork)
+        s2 = normalize_text(outlet2.subnetwork)
+        if c1 and c2 and s1 and s2 and c1 == c2 and s1 == s2:
+            return 100.0, True
+        return 0.0, False
+
+    # 2. CODE-BASED NETWORKS RULE (Атак, Ашан, Дикси, Лента, Метро, Пятёрочка, СОЮЗ СВ. ИОАННА ВОИНА)
     # Outlets match IF AND ONLY IF store codes match identically!
     if (
         outlet1.distributor in CODE_BASED_NETWORKS

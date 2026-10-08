@@ -572,22 +572,24 @@ def test_dixi_and_metro_code_matching():
     assert m3[1] == STATUS_UNIQUE
 
 
-def test_perekrestok_strict_subnetwork_matching():
+def test_perekrestok_code_and_subnetwork_matching():
     """
-    Verify that ПЕРЕКРЕСТОК ТД АО matches strictly by Name + Подсеть:
-    - Same Name and same Подсеть -> identical.
-    - Same Name, different Подсеть -> do NOT merge.
-    - Different Name -> do NOT merge.
+    Verify that ПЕРЕКРЕСТОК ТД АО matches strictly by Store Code + Подсеть:
+    - Same store code in Name and same Подсеть -> identical (even if Name string differs, e.g., 'Супермаркет_2280' vs 'Перекресток 2280').
+    - Same store code, different Подсеть -> do NOT merge.
+    - Different store code, same Подсеть -> do NOT merge.
     """
-    r1 = make_row(10, "Супермаркет_2196", "Ростовская обл, Новочеркасск г, Платовский пр-кт, 59А", 0,
+    r1 = make_row(10, "Супермаркет_2280", "Москва г, Совхозная ул, 41", 0,
                   dist="ПЕРЕКРЕСТОК ТД АО", subnetwork="Ru_Перекресток")
-    r2 = make_row(20, "Супермаркет_2196", "Ростовская обл. г.Новочеркасск, Платовский пр-т 59 А", 0,
+    r2 = make_row(20, "Перекресток 2280", "Москва, Совхозная ул, 41", 0,
+                  dist="ПЕРЕКРЕСТОК ТД АО", subnetwork="Ru_Перекресток")
+    r3 = make_row(30, "ПЕРЕКРЕСТОК ТД АО 2280 | совхозная-универсам", "г. Москва, ул. Совхозная, д. 41", 0,
                   dist="ПЕРЕКРЕСТОК ТД АО", subnetwork="Ru_Перекресток")
     # Different subnetwork (Карусель)
-    r3 = make_row(30, "Супермаркет_2196", "Ростовская обл, Новочеркасск г, Платовский пр-кт, 59А", 0,
+    r4 = make_row(40, "Супермаркет_2280", "Москва г, Совхозная ул, 41", 0,
                   dist="ПЕРЕКРЕСТОК ТД АО", subnetwork="Ru_Карусель")
-    # Different name
-    r4 = make_row(40, "Супермаркет_2116", "Ростовская обл, Новочеркасск г, Платовский пр-кт, 59А", 0,
+    # Different code (2281)
+    r5 = make_row(50, "Супермаркет_2281", "Москва г, Совхозная ул, 41", 0,
                   dist="ПЕРЕКРЕСТОК ТД АО", subnetwork="Ru_Перекресток")
 
     records = [
@@ -595,22 +597,30 @@ def test_perekrestok_strict_subnetwork_matching():
         OutletRecord(1, r2, COL_INDICES),
         OutletRecord(2, r3, COL_INDICES),
         OutletRecord(3, r4, COL_INDICES),
+        OutletRecord(4, r5, COL_INDICES),
     ]
     dedup = OutletsDeduplicator(records)
     results = dedup.run()
 
-    assert len(results) == 4
-    # r1 and r2 merged
-    assert results[0][0] == results[1][0]
-    assert results[0][1] == STATUS_IDENTICAL
-    assert results[1][1] == STATUS_IDENTICAL
+    assert len(results) == 5
+    res1 = [r for r in results if r[2][COL_INDICES['id']] == '10'][0]
+    res2 = [r for r in results if r[2][COL_INDICES['id']] == '20'][0]
+    res3 = [r for r in results if r[2][COL_INDICES['id']] == '30'][0]
+    res4 = [r for r in results if r[2][COL_INDICES['id']] == '40'][0]
+    res5 = [r for r in results if r[2][COL_INDICES['id']] == '50'][0]
 
-    # r3 and r4 in separate unique groups
-    assert results[2][0] != results[0][0]
-    assert results[3][0] != results[0][0]
-    assert results[2][0] != results[3][0]
-    assert results[2][1] == STATUS_UNIQUE
-    assert results[3][1] == STATUS_UNIQUE
+    # r1, r2, r3 merged into the same group
+    assert res1[0] == res2[0] == res3[0]
+    assert res1[1] == STATUS_IDENTICAL
+    assert res2[1] == STATUS_IDENTICAL
+    assert res3[1] == STATUS_IDENTICAL
+
+    # r4 (different subnetwork) and r5 (different code) are separate unique groups
+    assert res4[0] != res1[0]
+    assert res5[0] != res1[0]
+    assert res4[0] != res5[0]
+    assert res4[1] == STATUS_UNIQUE
+    assert res5[1] == STATUS_UNIQUE
 
 
 def test_auchan_and_lenta_3digit_code_padding():

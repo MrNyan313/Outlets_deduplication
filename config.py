@@ -26,6 +26,10 @@ NATIONAL_NETWORKS = {
 # Distributors that require strictly identical subnetwork ("Подсеть") and Name
 STRICT_SUBNETWORK_DISTRIBUTORS = {
     "ТАНДЕР АО (take-off) с 01.04.2018",
+}
+
+# Distributors that require strictly identical store code in Name AND subnetwork ("Подсеть")
+CODE_AND_SUBNETWORK_DISTRIBUTORS = {
     "ПЕРЕКРЕСТОК ТД АО",
 }
 
