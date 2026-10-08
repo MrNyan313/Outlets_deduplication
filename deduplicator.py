@@ -8,6 +8,7 @@ from config import (
     NATIONAL_NETWORKS,
     STRICT_SUBNETWORK_DISTRIBUTORS,
     CODE_BASED_NETWORKS,
+    PAD_3DIGIT_CODE_NETWORKS,
     STATUS_IDENTICAL,
     STATUS_SIMILAR,
     STATUS_UNIQUE,
@@ -88,7 +89,7 @@ class OutletRecord:
                     if not self.street_tokens and st_tokens:
                         self.street_tokens = st_tokens
 
-        self.store_code = extract_store_code(self.name)
+        self.store_code = extract_store_code(self.name, self.distributor)
         self.clean_name = clean_store_name(self.name)
 
         if self.distributor in CODE_BASED_NETWORKS:
@@ -98,24 +99,27 @@ class OutletRecord:
             else:
                 self.blocking_keys = []
         elif self.distributor in STRICT_SUBNETWORK_DISTRIBUTORS:
-            # Tander only matches by Name + Subnetwork!
+            # Strict Name + Subnetwork distributors (Тандер, Перекресток)
             clean_n = normalize_text(self.name)
             clean_sub = normalize_text(self.subnetwork)
             if clean_n and clean_sub:
-                self.blocking_keys = [(f"tander_{self.distributor}_{clean_n}_{clean_sub}", "tander")]
+                self.blocking_keys = [(f"strict_sub_{self.distributor}_{clean_n}_{clean_sub}", "strict_sub")]
             else:
                 self.blocking_keys = []
         elif self.is_vendor:
-            # Master coverage points can match code-based networks, Tander, or regular distributors
+            # Master coverage points can match code-based networks, strict subnetwork networks, or regular distributors
             keys = []
             if self.store_code:
                 for net in CODE_BASED_NETWORKS:
-                    keys.append((f"code_{net}_{self.store_code}", "code"))
+                    c = self.store_code
+                    if net in PAD_3DIGIT_CODE_NETWORKS and c.isdigit() and len(c) in (1, 2):
+                        c = c.zfill(3)
+                    keys.append((f"code_{net}_{c}", "code"))
             clean_n = normalize_text(self.name)
             clean_sub = normalize_text(self.subnetwork)
             if clean_n and clean_sub:
                 for dist in STRICT_SUBNETWORK_DISTRIBUTORS:
-                    keys.append((f"tander_{dist}_{clean_n}_{clean_sub}", "tander"))
+                    keys.append((f"strict_sub_{dist}_{clean_n}_{clean_sub}", "strict_sub"))
             keys.extend(get_address_blocking_keys(
                 raw_addr=self.address,
                 store_name=self.name,
@@ -145,8 +149,8 @@ def calculate_outlet_match_score(
     Calculates similarity between two outlets.
     Returns: (score, is_exact_match)
     """
-    # 0. STRICT NAME + SUBNETWORK RULE for ТАНДЕР
-    # For ТАНДЕР АО, outlets match IF AND ONLY IF both Name and Подсеть match identically!
+    # 0. STRICT NAME + SUBNETWORK RULE for STRICT_SUBNETWORK_DISTRIBUTORS (ТАНДЕР, ПЕРЕКРЕСТОК)
+    # Outlets match IF AND ONLY IF both Name and Подсеть match identically!
     if (
         outlet1.distributor in STRICT_SUBNETWORK_DISTRIBUTORS
         or outlet2.distributor in STRICT_SUBNETWORK_DISTRIBUTORS
@@ -161,7 +165,7 @@ def calculate_outlet_match_score(
             return 100.0, True
         return 0.0, False
 
-    # 1. CODE-BASED NETWORKS RULE (Атак, Пятёрочка, СОЮЗ СВ. ИОАННА ВОИНА)
+    # 1. CODE-BASED NETWORKS RULE (Атак, Ашан, Дикси, Лента, Метро, Пятёрочка, СОЮЗ СВ. ИОАННА ВОИНА)
     # Outlets match IF AND ONLY IF store codes match identically!
     if (
         outlet1.distributor in CODE_BASED_NETWORKS
@@ -171,6 +175,12 @@ def calculate_outlet_match_score(
             return 0.0, False
         c1 = outlet1.store_code
         c2 = outlet2.store_code
+        # Apply 3-digit padding if matching with/within PAD_3DIGIT_CODE_NETWORKS
+        if (outlet1.distributor in PAD_3DIGIT_CODE_NETWORKS or outlet2.distributor in PAD_3DIGIT_CODE_NETWORKS):
+            if c1.isdigit() and len(c1) in (1, 2):
+                c1 = c1.zfill(3)
+            if c2.isdigit() and len(c2) in (1, 2):
+                c2 = c2.zfill(3)
         if c1 and c2 and c1 == c2:
             return 100.0, True
         return 0.0, False

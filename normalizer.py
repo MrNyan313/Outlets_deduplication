@@ -3,6 +3,8 @@
 import re
 from typing import Tuple, List, Set, Optional
 
+from config import PAD_3DIGIT_CODE_NETWORKS
+
 # Organizational legal forms and generic chain words to remove from store names
 LEGAL_FORMS = {
     'ооо', 'ип', 'зао', 'оао', 'ао', 'пао', 'тд', 'тк', 'маг', 'магазин',
@@ -146,7 +148,7 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     return "б/н", "б/н"
 
 
-def extract_store_code(name: str) -> str:
+def extract_store_code(name: str, distributor: str = "") -> str:
     """
     Extracts store code / number from a store name.
     e.g. 'Дискаунтер_363H' -> '363H'
@@ -161,34 +163,68 @@ def extract_store_code(name: str) -> str:
          'X5 2680' -> '2680'
          'Атак 548' -> '548'
          'Верный 2177' -> '2177'
+         '1' (АШАН) -> '001'
+         '36' (АШАН) -> '036'
+         'Ашан (036) KUNCEVO' -> '036'
+         'Лента 1' -> '001'
+         'ДИКСИ-77007' -> '77007'
+         'МЕТРО 52' -> '52'
     """
     if not name:
         return ""
     t = str(name).strip().replace("ё", "е").replace("Ё", "Е")
 
     # 1. Number marker: № 604, №604, N 604, #604
-    m_no = re.search(r'[№N#]\s*([0-9a-zA-Zа-яА-Я]+)', t)
+    m_no = re.search(r'(?:[№#]|\bN\.?)\s*(\d+[а-яa-z0-9]*)', t, re.IGNORECASE)
     if m_no:
         code = m_no.group(1).upper().translate(CYR_TO_LAT)
+        if distributor in PAD_3DIGIT_CODE_NETWORKS and code.isdigit() and len(code) in (1, 2):
+            code = code.zfill(3)
         return code
 
-    # 2. Known chain prefixes followed by store code (alphanumeric, e.g. 5181, 363H, 31Y6, HA3A, S053, 548):
+    # 2. Parentheses code: e.g. '(001) MYTISHI', 'Ашан (036) KUNCEVO', '(023) ADYGEYA', '(719) REUTOV'
+    m_paren = re.search(r'\(([0-9a-zA-Zа-яА-Я]+)\)', t)
+    if m_paren:
+        code = m_paren.group(1).upper().translate(CYR_TO_LAT)
+        if distributor in PAD_3DIGIT_CODE_NETWORKS and code.isdigit() and len(code) in (1, 2):
+            code = code.zfill(3)
+        return code
+
+    # 3. Known chain prefixes followed by store code (alphanumeric):
+    # e.g. 'Дикси ДИКСИ-78510', 'ДИКСИ-47122', 'МЕТРО 52', 'Ашан 25', 'Лента 8', 'Лента611'
     m_pref = re.search(
-        r'\b(?:дискаунтер|гипермаркет|супермаркет|магазин|маг|тт|пятерочка|верный|атак(?:\s+ооо)?|чижик|даркстор|x5|х5)[_ ]+([0-9a-zA-Zа-яА-Я]+)\b',
+        r'\b(?:дискаунтер|гипермаркет|супермаркет|магазин|маг|тт|пятерочка|верный|атак(?:\s+ооо)?|чижик|даркстор|x5|х5|дикси|метро|metro|ашан|лента)[_ \-]*(?:дикси[_ \-]*)?([0-9a-zA-Zа-яА-Я]+)\b',
         t, re.IGNORECASE
     )
     if m_pref:
-        return m_pref.group(1).upper().translate(CYR_TO_LAT)
+        code = m_pref.group(1).upper().translate(CYR_TO_LAT)
+        if not code.lower() in {'ооо', 'рц', 'ао', 'зао'}:
+            if distributor in PAD_3DIGIT_CODE_NETWORKS and code.isdigit() and len(code) in (1, 2):
+                code = code.zfill(3)
+            return code
 
-    # 3. Pure code: 2 to 7 alphanumeric characters (e.g. '5268', '548', '363H', 'HA3A', '204')
-    if re.match(r'^[0-9a-zA-Zа-яА-Я]{2,7}$', t):
-        return t.upper().translate(CYR_TO_LAT)
+    # 4. Pure code: 1 to 7 alphanumeric characters (e.g. '1', '36', '5268', '548', '363H', 'HA3A', '204')
+    if re.match(r'^[0-9a-zA-Zа-яА-Я]{1,7}$', t):
+        code = t.upper().translate(CYR_TO_LAT)
+        if distributor in PAD_3DIGIT_CODE_NETWORKS and code.isdigit() and len(code) in (1, 2):
+            code = code.zfill(3)
+        return code
 
-    # 4. Alphanumeric store codes in mixed text: e.g. H085, 304S, 31Y6, E231
+    # 5. Digits followed by chain name: e.g. '77531 Дикси'
+    m_trail = re.search(r'^([0-9a-zA-Zа-яА-Я]+)\s+(?:дикси|метро|metro|ашан|лента)\b', t, re.IGNORECASE)
+    if m_trail:
+        code = m_trail.group(1).upper().translate(CYR_TO_LAT)
+        if distributor in PAD_3DIGIT_CODE_NETWORKS and code.isdigit() and len(code) in (1, 2):
+            code = code.zfill(3)
+        return code
+
+    # 6. Alphanumeric store codes in mixed text: e.g. H085, 304S, 31Y6, E231
     m_code = re.search(r'(?:^|[^a-zA-Zа-яА-Я0-9])([a-zA-Zа-яА-Я0-9]{3,6})(?:$|[^a-zA-Zа-яА-Я0-9])', t)
     if m_code:
         code = m_code.group(1).upper().translate(CYR_TO_LAT)
         if any(c.isdigit() for c in code):
+            if distributor in PAD_3DIGIT_CODE_NETWORKS and code.isdigit() and len(code) in (1, 2):
+                code = code.zfill(3)
             return code
 
     return ""

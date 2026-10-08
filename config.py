@@ -23,16 +23,27 @@ NATIONAL_NETWORKS = {
     "ТАНДЕР АО (take-off) с 01.04.2018",
 }
 
-# Distributors that require strictly identical subnetwork ("Подсеть")
+# Distributors that require strictly identical subnetwork ("Подсеть") and Name
 STRICT_SUBNETWORK_DISTRIBUTORS = {
     "ТАНДЕР АО (take-off) с 01.04.2018",
+    "ПЕРЕКРЕСТОК ТД АО",
 }
 
 # National retail networks where matching is strictly by store code in Name
 CODE_BASED_NETWORKS = {
     "Атак take off c 01.01.2019",
+    "АШАН ООО (take-off) с 01.04.2018",
+    "Дикси Юг АО (take-off) с 01.04.2018",
+    "Лента ООО (take-off) с 01.04.2018",
+    "МЕТРО КЭШ ЭНД КЕРРИ ООО (take-off) с 01.04.2018",
     "ПЯТЁРОЧКА",
     "СОЮЗ СВ. ИОАННА ВОИНА ООО (take-off) с 01.04.2018",
+}
+
+# Distributors that require padding 1- or 2-digit store codes to 3 digits (e.g. '1' -> '001', '36' -> '036')
+PAD_3DIGIT_CODE_NETWORKS = {
+    "АШАН ООО (take-off) с 01.04.2018",
+    "Лента ООО (take-off) с 01.04.2018",
 }
 
 # Status strings

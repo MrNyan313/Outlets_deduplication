@@ -519,3 +519,160 @@ def test_similarity_percentage_option(tmp_path):
     assert rows[2][-1] == 1.0
     assert rows[3][-1] == 0.0
 
+
+def test_dixi_and_metro_code_matching():
+    """
+    Verify that Дикси and МЕТРО match by store code in isolation:
+    - Same code -> identical.
+    - Different code -> cannot merge.
+    """
+    # Dixi
+    r_d1 = make_row(1, "Дикси ДИКСИ-77007", "Москва г, Тверская ул, 1", 0, dist="Дикси Юг АО (take-off) с 01.04.2018")
+    r_d2 = make_row(2, "ДИКСИ-77007", "Москва г, ул. Тверская, дом 1", 0, dist="Дикси Юг АО (take-off) с 01.04.2018")
+    r_d3 = make_row(3, "ДИКСИ-50879", "Москва г, Тверская ул, 1", 0, dist="Дикси Юг АО (take-off) с 01.04.2018")
+
+    # Metro
+    r_m1 = make_row(4, "МЕТРО 52", "Москва г, Ленинградское ш, 71", 0, dist="МЕТРО КЭШ ЭНД КЕРРИ ООО (take-off) с 01.04.2018")
+    r_m2 = make_row(5, "52", "Москва г, Ленинградское ш, 71", 0, dist="МЕТРО КЭШ ЭНД КЕРРИ ООО (take-off) с 01.04.2018")
+    r_m3 = make_row(6, "МЕТРО 318", "Москва г, Ленинградское ш, 71", 0, dist="МЕТРО КЭШ ЭНД КЕРРИ ООО (take-off) с 01.04.2018")
+
+    records = [
+        OutletRecord(0, r_d1, COL_INDICES),
+        OutletRecord(1, r_d2, COL_INDICES),
+        OutletRecord(2, r_d3, COL_INDICES),
+        OutletRecord(3, r_m1, COL_INDICES),
+        OutletRecord(4, r_m2, COL_INDICES),
+        OutletRecord(5, r_m3, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
+
+    assert len(results) == 6
+
+    # Dixi groups
+    d1 = [r for r in results if r[2][COL_INDICES['id']] == '1'][0]
+    d2 = [r for r in results if r[2][COL_INDICES['id']] == '2'][0]
+    d3 = [r for r in results if r[2][COL_INDICES['id']] == '3'][0]
+
+    assert d1[0] == d2[0]
+    assert d1[1] == STATUS_IDENTICAL
+    assert d2[1] == STATUS_IDENTICAL
+    assert d3[0] != d1[0]
+    assert d3[1] == STATUS_UNIQUE
+
+    # Metro groups
+    m1 = [r for r in results if r[2][COL_INDICES['id']] == '4'][0]
+    m2 = [r for r in results if r[2][COL_INDICES['id']] == '5'][0]
+    m3 = [r for r in results if r[2][COL_INDICES['id']] == '6'][0]
+
+    assert m1[0] == m2[0]
+    assert m1[1] == STATUS_IDENTICAL
+    assert m2[1] == STATUS_IDENTICAL
+    assert m3[0] != m1[0]
+    assert m3[1] == STATUS_UNIQUE
+
+
+def test_perekrestok_strict_subnetwork_matching():
+    """
+    Verify that ПЕРЕКРЕСТОК ТД АО matches strictly by Name + Подсеть:
+    - Same Name and same Подсеть -> identical.
+    - Same Name, different Подсеть -> do NOT merge.
+    - Different Name -> do NOT merge.
+    """
+    r1 = make_row(10, "Супермаркет_2196", "Ростовская обл, Новочеркасск г, Платовский пр-кт, 59А", 0,
+                  dist="ПЕРЕКРЕСТОК ТД АО", subnetwork="Ru_Перекресток")
+    r2 = make_row(20, "Супермаркет_2196", "Ростовская обл. г.Новочеркасск, Платовский пр-т 59 А", 0,
+                  dist="ПЕРЕКРЕСТОК ТД АО", subnetwork="Ru_Перекресток")
+    # Different subnetwork (Карусель)
+    r3 = make_row(30, "Супермаркет_2196", "Ростовская обл, Новочеркасск г, Платовский пр-кт, 59А", 0,
+                  dist="ПЕРЕКРЕСТОК ТД АО", subnetwork="Ru_Карусель")
+    # Different name
+    r4 = make_row(40, "Супермаркет_2116", "Ростовская обл, Новочеркасск г, Платовский пр-кт, 59А", 0,
+                  dist="ПЕРЕКРЕСТОК ТД АО", subnetwork="Ru_Перекресток")
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+        OutletRecord(2, r3, COL_INDICES),
+        OutletRecord(3, r4, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
+
+    assert len(results) == 4
+    # r1 and r2 merged
+    assert results[0][0] == results[1][0]
+    assert results[0][1] == STATUS_IDENTICAL
+    assert results[1][1] == STATUS_IDENTICAL
+
+    # r3 and r4 in separate unique groups
+    assert results[2][0] != results[0][0]
+    assert results[3][0] != results[0][0]
+    assert results[2][0] != results[3][0]
+    assert results[2][1] == STATUS_UNIQUE
+    assert results[3][1] == STATUS_UNIQUE
+
+
+def test_auchan_and_lenta_3digit_code_padding():
+    """
+    Verify 1- and 2-digit store codes are padded to 3 digits for Ашан and Лента:
+    - ID 88664618376834150 (name '1') and ID 88664618385207909 (name '(001) MYTISHI') merge!
+    - ID 88664618376833599 (name '36') and ID 88664617663859091 (name 'Ашан (036) KUNCEVO') merge!
+    - Lenta 'Лента 1' and 'Лента 001' merge!
+    """
+    # Auchan example 1: 1 and (001) MYTISHI
+    r_a1 = make_row("88664618376834150", "1", "Московская обл, Мытищи г, Осташковское ш, 1", 0,
+                    dist="АШАН ООО (take-off) с 01.04.2018")
+    r_a2 = make_row("88664618385207909", "(001) MYTISHI", "Московская область,гМытищи,Осташковское шоссе, 1, МКАД 91 км", 0,
+                    dist="АШАН ООО (take-off) с 01.04.2018")
+
+    # Auchan example 2: 36 and Ашан (036) KUNCEVO
+    r_a3 = make_row("88664618376833599", "36", "Москва г, Ярцевская ул, 19", 0,
+                    dist="АШАН ООО (take-off) с 01.04.2018")
+    r_a4 = make_row("88664617663859091", "Ашан (036) KUNCEVO", "Московская область,гМосква,ул. Ярцевская, д.19,стр.1", 0,
+                    dist="АШАН ООО (take-off) с 01.04.2018")
+
+    # Lenta example: Лента 5 and Лента 005
+    r_l1 = make_row("101", "Лента 5", "г. Санкт-Петербург, ул. Савушкина, 112", 0,
+                    dist="Лента ООО (take-off) с 01.04.2018")
+    r_l2 = make_row("102", "Лента 005", "Санкт-Петербург, Савушкина ул, 112", 0,
+                    dist="Лента ООО (take-off) с 01.04.2018")
+
+    records = [
+        OutletRecord(0, r_a1, COL_INDICES),
+        OutletRecord(1, r_a2, COL_INDICES),
+        OutletRecord(2, r_a3, COL_INDICES),
+        OutletRecord(3, r_a4, COL_INDICES),
+        OutletRecord(4, r_l1, COL_INDICES),
+        OutletRecord(5, r_l2, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
+
+    assert len(results) == 6
+
+    # Auchan group 1: 1 and 001
+    res_a1 = [r for r in results if r[2][COL_INDICES['id']] == "88664618376834150"][0]
+    res_a2 = [r for r in results if r[2][COL_INDICES['id']] == "88664618385207909"][0]
+    assert res_a1[0] == res_a2[0]
+    assert res_a1[1] == STATUS_IDENTICAL
+    assert res_a2[1] == STATUS_IDENTICAL
+
+    # Auchan group 2: 36 and 036
+    res_a3 = [r for r in results if r[2][COL_INDICES['id']] == "88664618376833599"][0]
+    res_a4 = [r for r in results if r[2][COL_INDICES['id']] == "88664617663859091"][0]
+    assert res_a3[0] == res_a4[0]
+    assert res_a3[1] == STATUS_IDENTICAL
+    assert res_a4[1] == STATUS_IDENTICAL
+
+    # Auchan groups are distinct
+    assert res_a1[0] != res_a3[0]
+
+    # Lenta group: 5 and 005
+    res_l1 = [r for r in results if r[2][COL_INDICES['id']] == "101"][0]
+    res_l2 = [r for r in results if r[2][COL_INDICES['id']] == "102"][0]
+    assert res_l1[0] == res_l2[0]
+    assert res_l1[1] == STATUS_IDENTICAL
+    assert res_l2[1] == STATUS_IDENTICAL
+
+

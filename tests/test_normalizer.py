@@ -29,6 +29,18 @@ def test_store_code_extraction():
     assert extract_store_code("Дискаунтер_31Y6") == "31Y6"
     assert extract_store_code("Дискаунтер_HA3A") == "HA3A"
     assert extract_store_code("5268") == "5268"
+    assert extract_store_code("1", "АШАН ООО (take-off) с 01.04.2018") == "001"
+    assert extract_store_code("(001) MYTISHI", "АШАН ООО (take-off) с 01.04.2018") == "001"
+    assert extract_store_code("36", "АШАН ООО (take-off) с 01.04.2018") == "036"
+    assert extract_store_code("Ашан (036) KUNCEVO", "АШАН ООО (take-off) с 01.04.2018") == "036"
+    assert extract_store_code("Лента 1", "Лента ООО (take-off) с 01.04.2018") == "001"
+    assert extract_store_code("Лента 36", "Лента ООО (take-off) с 01.04.2018") == "036"
+    assert extract_store_code("Лента 4521", "Лента ООО (take-off) с 01.04.2018") == "4521"
+    assert extract_store_code("ДИКСИ-77007", "Дикси Юг АО (take-off) с 01.04.2018") == "77007"
+    assert extract_store_code("Дикси ДИКСИ-78510", "Дикси Юг АО (take-off) с 01.04.2018") == "78510"
+    assert extract_store_code("77531 Дикси", "Дикси Юг АО (take-off) с 01.04.2018") == "77531"
+    assert extract_store_code("МЕТРО 52", "МЕТРО КЭШ ЭНД КЕРРИ ООО (take-off) с 01.04.2018") == "52"
+    assert extract_store_code("88", "МЕТРО КЭШ ЭНД КЕРРИ ООО (take-off) с 01.04.2018") == "88"
 
 def test_clean_store_name():
     assert "малинка 604" in clean_store_name("Люкс ООО маг.Малинка №604")
