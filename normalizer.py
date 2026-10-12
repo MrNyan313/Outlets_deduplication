@@ -35,12 +35,23 @@ ADDRESS_STOP_WORDS = REGION_WORDS | {
 }
 
 MAJOR_CITIES = {
-    'москва', 'санкт-петербург', 'петербург', 'севастополь'
+    'москва', 'санкт-петербург', 'петербург', 'севастополь',
+    'новосибирск', 'екатеринбург', 'казань', 'нижний новгород', 'челябинск',
+    'красноярск', 'самара', 'уфа', 'ростов-на-дону', 'краснодар', 'омск',
+    'воронеж', 'пермь', 'волгоград', 'саратов', 'тюмень', 'тольятти',
+    'барнаул', 'ижевск', 'хабаровск', 'ульяновск', 'иркутск', 'ярославль',
+    'владивосток', 'махачкала', 'томск', 'оренбург', 'кемерово', 'новокузнецк',
+    'рязань', 'астрахань', 'набережные челны', 'пенза', 'липецк', 'киров',
+    'чебоксары', 'тула', 'калининград', 'курск', 'сочи', 'ставрополь',
+    'улан-удэ', 'тверь', 'магнитогорск', 'иваново', 'брянск', 'белгород',
+    'сургут', 'владимир', 'чита', 'архангельск', 'калуга', 'смоленск',
+    'волжский', 'саранск', 'череповец', 'курган', 'подольск', 'вологда',
+    'орел', 'орёл'
 }
 
 STREET_PATTERNS = [
-    r'\b(?:ул|улица|пр-кт|проспект|проезд|пер|переулок|бул|бульвар|шоссе|ш|наб|набережная|аллея|тракт|тупик)\.?\s+([а-яa-z0-9\-]+(?:\s+[а-яa-z0-9\-]+){0,2})',
-    r'([а-яa-z0-9\-]+(?:\s+[а-яa-z0-9\-]+){0,2})\s+\b(?:ул|улица|пр-кт|проспект|проезд|пер|переулок|бул|бульвар|шоссе|ш|наб|набережная|аллея|тракт|тупик)\b'
+    r'\b(?:ул|улица|пр-кт|проспект|проезд|пер|переулок|бул|бульвар|шоссе|ш|наб|набережная|аллея|тракт|тупик)\.?\s*([а-яa-z0-9\-]+(?:\s+[а-яa-z0-9\-]+){0,2})',
+    r'([а-яa-z0-9\-]+(?:\s+[а-яa-z0-9\-]+){0,2})\s*\b(?:ул|улица|пр-кт|проспект|проезд|пер|переулок|бул|бульвар|шоссе|ш|наб|набережная|аллея|тракт|тупик)\b'
 ]
 
 # Mapping Cyrillic lookalikes to Latin for store codes
@@ -261,25 +272,38 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     parts = [p.strip() for p in addr_clean.split(',') if p.strip()]
 
     city = ""
+    settlement_words = set()
 
-    # Detect city
+    # Check major cities
+    for mc in MAJOR_CITIES:
+        if mc in t:
+            settlement_words.update(mc.split())
+            if not city:
+                city = mc
+
+    # Check settlement indicators
+    for pat in [
+        r'\b(?:город|поселок|пос|село|деревня|станица|хутор|пгт|рп)\.?\s*([а-яa-z0-9\-]+)',
+        r'\b(?:г|п|с|д|х|ст)\.[\s]*([а-яa-z0-9\-]+)',
+        r'\b(?:г|п|с|х|ст)\s+([а-яa-z0-9\-]+)',
+        r'\b([а-яa-z0-9\-]+)\s+(?:г|п|с|д|пгт|рп)\b'
+    ]:
+        for m in re.finditer(pat, addr_clean):
+            w = m.group(1).strip()
+            if w not in {'ул', 'улица', 'дом', 'стр', 'корп', 'кв', 'пом', 'обл', 'область', 'край', 'район', 'рн', 'р-н'}:
+                settlement_words.add(w)
+                if not city and w not in ADDRESS_STOP_WORDS and not w.isdigit():
+                    city = w
+
+    # Detect city from comma-separated parts if not found
     for part in parts:
         words = re.findall(r'[а-яa-z0-9]+', part)
-
-        # Check major city
-        for mc in MAJOR_CITIES:
-            if mc in part:
-                city = mc
-                break
-        if city:
-            break
-
-        # Check city indicators
         if any(w in {'г', 'город', 'пгт', 'рп', 'п', 'поселок'} for w in words):
             c_words = [w for w in words if w not in ADDRESS_STOP_WORDS and not w.isdigit()]
             if c_words:
-                city = ' '.join(c_words)
-                break
+                settlement_words.update(c_words)
+                if not city:
+                    city = ' '.join(c_words)
 
     # Extract clean street tokens using explicit street patterns
     street_words = []
@@ -288,16 +312,16 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
         if m:
             cand = m.group(1).strip()
             cand = re.sub(r'^\d+\s*|\s*\d+$', '', cand).strip()
-            words = [w for w in re.findall(r'[а-яa-z0-9]+', cand) if len(w) >= 3 and w not in ADDRESS_STOP_WORDS]
+            words = [w for w in re.findall(r'[а-яa-z0-9]+', cand) if len(w) >= 3 and w not in ADDRESS_STOP_WORDS and w not in settlement_words]
             if words:
                 street_words = words
                 break
 
-    # Fallback if street pattern didn't match: take words that are not region/city/stop words
+    # Fallback if street pattern didn't match: take words that are not region/city/settlement/stop words
     if not street_words:
         all_words = re.findall(r'[а-яa-z0-9]+', addr_clean)
         for w in all_words:
-            if len(w) >= 3 and w not in ADDRESS_STOP_WORDS:
+            if len(w) >= 3 and w not in ADDRESS_STOP_WORDS and w not in settlement_words:
                 if not city or w not in city.split():
                     street_words.append(w)
 

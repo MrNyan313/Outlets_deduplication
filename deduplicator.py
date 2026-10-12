@@ -355,10 +355,19 @@ def calculate_outlet_match_score(
     street_str2 = ' '.join(outlet2.street_tokens)
     street_fuzzy = fuzz.token_sort_ratio(street_str1, street_str2) if (street_str1 and street_str2) else 0
 
-    if not street_overlap and street_fuzzy < 70:
+    if s_set1 and s_set2:
+        diff1 = s_set1 - s_set2
+        diff2 = s_set2 - s_set1
+        # If both addresses have distinct specific street tokens and street similarity is low, they conflict!
+        if diff1 and diff2 and street_fuzzy < 70:
+            return 0.0, False
+        if not street_overlap and street_fuzzy < 70:
+            return 0.0, False
+    elif not street_overlap and street_fuzzy < 70:
         return 0.0, False
 
     # 2c. City check: if both cities are identified, they must not conflict
+    city_overlap = False
     if outlet1.city and outlet2.city:
         c_set1 = set(outlet1.city.split())
         c_set2 = set(outlet2.city.split())
@@ -379,12 +388,30 @@ def calculate_outlet_match_score(
 
     token_set = fuzz.token_set_ratio(name1, name2) if (name1 and name2) else 0.0
     token_sort = fuzz.token_sort_ratio(name1, name2) if (name1 and name2) else 0.0
-    name_score = max(token_set, token_sort)
+
+    # When both names have distinct distinguishing words (neither is a subset of the other),
+    # token_sort reflects the true similarity (avoiding false matches from shared chain/city prefixes)
+    w1 = set(name1.split())
+    w2 = set(name2.split())
+    if w1 - w2 and w2 - w1:
+        name_score = token_sort
+    else:
+        name_score = max(token_set, token_sort)
 
     if code_match:
         score = 100.0
     else:
         score = name_score
+
+    # Without store codes: if physical location is incomplete (missing house, missing street, or unverified city),
+    # different-named stores cannot be assumed to be identical/similar. They require high name similarity (>= 90).
+    if not code_match:
+        has_real_house = bool(has_num1 and has_num2 and outlet1.base_house == outlet2.base_house)
+        has_real_street = bool(s_set1 and s_set2 and street_overlap)
+        has_real_city = bool(outlet1.city and outlet2.city and city_overlap)
+        if not (has_real_house and has_real_street and has_real_city):
+            if name_score < 90:
+                return 0.0, False
 
     # 4. Determine whether it is an exact (identical) or similar match:
     is_national = outlet1.is_national or outlet2.is_national

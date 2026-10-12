@@ -843,4 +843,44 @@ def test_globus_elektrostal_address_variants_merge():
     assert res_short[3] == 75.0
 
 
+def test_detskiy_mir_different_streets_and_names_never_merge():
+    """
+    Two outlets in the same settlement with the same house number ('2')
+    but on different streets (e.g. ул. Никитина vs ул. Хабарова) and with different mall names
+    must NEVER merge into the same group.
+    """
+    dist = "ДЕТСКИЙ МИР ПАО"
+    r1 = make_row(
+        323696223217277690,
+        "ДМ Московский Столица",
+        "г.Москва, г.Московский,Никитина,2",
+        0,
+        dist=dist,
+        subnetwork="Ru_Детский мир"
+    )
+    r2 = make_row(
+        323696223217278702,
+        "ДМ Московский Новомосковский",
+        "Московский,ул.Хабарова,2",
+        0,
+        dist=dist,
+        subnetwork="Ru_Детский мир"
+    )
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run(include_similarity=True)
+
+    assert len(results) == 2
+    # Must NOT be in the same group!
+    assert results[0][0] != results[1][0]
+    # Both must be STATUS_UNIQUE
+    assert results[0][1] == STATUS_UNIQUE
+    assert results[1][1] == STATUS_UNIQUE
+
+
+
 
