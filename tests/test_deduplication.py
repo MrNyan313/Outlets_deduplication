@@ -806,3 +806,41 @@ def test_globus_different_cities_never_merge():
     assert results[1][1] == STATUS_UNIQUE
 
 
+def test_globus_elektrostal_address_variants_merge():
+    """
+    Records with different address formulations (e.g. 'Массив 1 тер, стр 2' vs 'массив 1, стр. 2')
+    and short address records ('ЭЛС') must all merge into a single group for that hypermarket.
+    """
+    dist = "ГИПЕРГЛОБУС ООО (take-off)"
+    r1 = make_row(101, "Гипер Глобус  Электросталь 9", "Электросталь, Ногинский р-н, пос. Случайный, массив 1, стр. 2,", 0, dist=dist, subnetwork="Ru_Globus")
+    r2 = make_row(102, "ЭЛС", "Московская обл, Электросталь г, Случайный п, Массив 1 тер, стр 2", 0, dist=dist, subnetwork="Ru_Globus")
+    r3 = make_row(103, "ЭЛС", "ЭЛС", 0, dist=dist, subnetwork="Ru_Globus")
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+        OutletRecord(2, r3, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run(include_similarity=True)
+
+    assert len(results) == 3
+    # All 3 records must be in the same group!
+    assert results[0][0] == results[1][0] == results[2][0]
+
+    # Full address records must be STATUS_IDENTICAL (100.0%)
+    res_full1 = [r for r in results if r[2][COL_INDICES['id']] == '101'][0]
+    res_full2 = [r for r in results if r[2][COL_INDICES['id']] == '102'][0]
+    res_short = [r for r in results if r[2][COL_INDICES['id']] == '103'][0]
+
+    assert res_full1[1] == STATUS_IDENTICAL
+    assert res_full1[3] == 100.0
+    assert res_full2[1] == STATUS_IDENTICAL
+    assert res_full2[3] == 100.0
+
+    # Short address record must be STATUS_SIMILAR (75.0%)
+    assert res_short[1] == STATUS_SIMILAR
+    assert res_short[3] == 75.0
+
+
+

@@ -258,13 +258,7 @@ def calculate_outlet_match_score(
             # Match into the same group, but mark as "Похожая" (STATUS_SIMILAR, 75.0%)
             if outlet1.is_globus_short != outlet2.is_globus_short:
                 return 75.0, False
-            # If both are full address records, check for house number conflict
-            if not outlet1.is_globus_short and not outlet2.is_globus_short:
-                has_num1 = bool(outlet1.base_house and outlet1.base_house != "б/н")
-                has_num2 = bool(outlet2.base_house and outlet2.base_house != "б/н")
-                if has_num1 and has_num2 and outlet1.base_house != outlet2.base_house:
-                    return 0.0, False
-            # Both full or both short with same code -> 100% IDENTICAL
+            # Both full or both short with same location code -> 100% IDENTICAL
             return 100.0, True
         else:
             # For new/unknown cities/locations without extracted globus_code:
