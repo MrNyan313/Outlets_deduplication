@@ -1,6 +1,7 @@
 """Outlets Deduplication Engine."""
 
 from collections import defaultdict
+import re
 from typing import List, Dict, Any, Tuple, Optional
 from rapidfuzz import fuzz
 
@@ -10,6 +11,8 @@ from config import (
     CODE_AND_SUBNETWORK_DISTRIBUTORS,
     CODE_BASED_NETWORKS,
     PAD_3DIGIT_CODE_NETWORKS,
+    GLOBUS_DISTRIBUTOR,
+    GLOBUS_CITY_ABBREVIATIONS,
     STATUS_IDENTICAL,
     STATUS_SIMILAR,
     STATUS_UNIQUE,
@@ -24,6 +27,57 @@ from normalizer import (
     clean_store_name,
     normalize_text,
 )
+
+
+def is_subsequence_abbreviation(abbr: str, word: str) -> bool:
+    """Checks if characters in abbr appear in sequence in word (case-insensitive)."""
+    if not abbr or not word or len(abbr) > len(word):
+        return False
+    it = iter(word.lower())
+    return all(c in it for c in abbr.lower())
+
+
+def is_globus_short_record(name: str, addr: str, street: str, base_house: str = "б/н") -> bool:
+    """Detects if a Globus record has only an abbreviation / short name and no full physical address."""
+    addr_clean = addr.strip().upper()
+    name_clean = name.strip().upper()
+    has_no_real_address = (
+        not street or not street.strip() or street.strip() == "None"
+        or base_house == "б/н"
+    )
+    is_short_addr = len(addr_clean) <= 5 or addr_clean == name_clean or addr_clean in GLOBUS_CITY_ABBREVIATIONS
+    is_short_name = len(name_clean) <= 4 or name_clean in GLOBUS_CITY_ABBREVIATIONS
+    return is_short_addr and is_short_name and has_no_real_address
+
+
+def get_globus_location_code(name: str, addr: str, street: str) -> Optional[str]:
+    """
+    Extracts hypermarket location code for Globus.
+    Supports known dictionary abbreviations, city names, and dynamic acronym matching.
+    """
+    if "5025" in name:
+        return "ТУЛ2"
+    for abbr in sorted(GLOBUS_CITY_ABBREVIATIONS.keys(), key=len, reverse=True):
+        if re.search(rf"\b{abbr}\b", name, re.IGNORECASE):
+            return abbr
+    for abbr, city in GLOBUS_CITY_ABBREVIATIONS.items():
+        if city in name.lower() or city.replace("е", "ё") in name.lower():
+            if abbr == "ТУЛ" and "215" in (addr + " " + street):
+                return "ТУЛ2"
+            return abbr
+    for abbr, city in GLOBUS_CITY_ABBREVIATIONS.items():
+        comb = (addr + " " + street).lower().replace("ё", "е")
+        if city in comb:
+            if abbr == "ТУЛ" and "215" in comb:
+                return "ТУЛ2"
+            return abbr
+    # Dynamic acronym check for unknown city/location:
+    for token in re.findall(r"\b[А-ЯA-Z]{3,4}\b", name):
+        words = re.findall(r"[а-яa-z]{4,}", (addr + " " + street).lower())
+        for w in words:
+            if is_subsequence_abbreviation(token, w):
+                return token
+    return None
 
 
 class OutletRecord:
@@ -45,6 +99,8 @@ class OutletRecord:
         'clean_name',
         'blocking_keys',
         'is_national',
+        'globus_code',
+        'is_globus_short',
     )
 
     def __init__(self, index: int, raw_row: tuple, col_indices: Dict[str, int]):
@@ -75,8 +131,10 @@ class OutletRecord:
         self.street_tokens = street_tokens
 
         # Fallback to Street column if available and primary address was incomplete
+        street_col_val = ""
         if 'Street' in col_indices:
             street_col = str(raw_row[col_indices['Street']]).strip()
+            street_col_val = street_col
             if street_col and street_col != "None":
                 if self.base_house == "б/н":
                     st_base, st_full = extract_house_components(street_col)
@@ -93,7 +151,27 @@ class OutletRecord:
         self.store_code = extract_store_code(self.name, self.distributor)
         self.clean_name = clean_store_name(self.name)
 
-        if self.distributor in CODE_BASED_NETWORKS:
+        self.globus_code: Optional[str] = None
+        self.is_globus_short: bool = False
+        if self.distributor == GLOBUS_DISTRIBUTOR:
+            self.globus_code = get_globus_location_code(self.name, self.address, street_col_val)
+            self.is_globus_short = is_globus_short_record(self.name, self.address, street_col_val, self.base_house)
+
+        if self.distributor == GLOBUS_DISTRIBUTOR:
+            keys = []
+            if self.globus_code:
+                keys.append((f"globus_{self.globus_code}", "globus_code"))
+            if not self.is_globus_short:
+                keys.extend(get_address_blocking_keys(
+                    raw_addr=self.address,
+                    store_name=self.name,
+                    base_house=self.base_house,
+                    city=self.city,
+                    street_tokens=self.street_tokens,
+                    store_code=self.store_code,
+                ))
+            self.blocking_keys = keys
+        elif self.distributor in CODE_BASED_NETWORKS:
             # Code-based networks only match by store code!
             if self.store_code:
                 self.blocking_keys = [(f"code_{self.distributor}_{self.store_code}", "code")]
@@ -115,8 +193,12 @@ class OutletRecord:
             else:
                 self.blocking_keys = []
         elif self.is_vendor:
-            # Master coverage points can match code-based networks, code+subnetwork networks, strict subnetwork networks, or regular distributors
+            # Master coverage points can match code-based networks, code+subnetwork networks, strict subnetwork networks, globus, or regular distributors
             keys = []
+            if self.subnetwork == "Ru_Globus" or "глобус" in self.name.lower():
+                code = get_globus_location_code(self.name, self.address, street_col_val)
+                if code:
+                    keys.append((f"globus_{code}", "globus_code"))
             if self.store_code:
                 for net in CODE_BASED_NETWORKS:
                     c = self.store_code
@@ -160,6 +242,51 @@ def calculate_outlet_match_score(
     Calculates similarity between two outlets.
     Returns: (score, is_exact_match)
     """
+    # 0a. GLOBUS HYPERMARKET RULE
+    if (
+        outlet1.distributor == GLOBUS_DISTRIBUTOR
+        or outlet2.distributor == GLOBUS_DISTRIBUTOR
+    ):
+        if not outlet1.is_vendor and not outlet2.is_vendor and outlet1.distributor != outlet2.distributor:
+            return 0.0, False
+        c1 = outlet1.globus_code
+        c2 = outlet2.globus_code
+        if c1 and c2:
+            if c1 != c2:
+                return 0.0, False
+            # If one record has only short name & short address and the other has a full address:
+            # Match into the same group, but mark as "Похожая" (STATUS_SIMILAR, 75.0%)
+            if outlet1.is_globus_short != outlet2.is_globus_short:
+                return 75.0, False
+            # If both are full address records, check for house number conflict
+            if not outlet1.is_globus_short and not outlet2.is_globus_short:
+                has_num1 = bool(outlet1.base_house and outlet1.base_house != "б/н")
+                has_num2 = bool(outlet2.base_house and outlet2.base_house != "б/н")
+                if has_num1 and has_num2 and outlet1.base_house != outlet2.base_house:
+                    return 0.0, False
+            # Both full or both short with same code -> 100% IDENTICAL
+            return 100.0, True
+        else:
+            # For new/unknown cities/locations without extracted globus_code:
+            # Match by physical address + dynamic acronym / name check
+            has_num1 = bool(outlet1.base_house and outlet1.base_house != "б/н")
+            has_num2 = bool(outlet2.base_house and outlet2.base_house != "б/н")
+            if has_num1 and has_num2 and outlet1.base_house == outlet2.base_house:
+                s_set1 = set(outlet1.street_tokens)
+                s_set2 = set(outlet2.street_tokens)
+                street_overlap = bool(s_set1 and s_set2 and (s_set1 & s_set2))
+                if street_overlap:
+                    tokens1 = re.findall(r"\b[А-ЯA-Z]{3,4}\b", outlet1.name)
+                    tokens2 = re.findall(r"\b[А-ЯA-Z]{3,4}\b", outlet2.name)
+                    words1 = re.findall(r"[а-яa-z]{4,}", outlet1.name.lower())
+                    words2 = re.findall(r"[а-яa-z]{4,}", outlet2.name.lower())
+                    acronym_match = any(is_subsequence_abbreviation(t, w) for t in tokens1 for w in words2) or \
+                                    any(is_subsequence_abbreviation(t, w) for t in tokens2 for w in words1)
+                    token_set = fuzz.token_set_ratio(outlet1.clean_name, outlet2.clean_name)
+                    if acronym_match or token_set >= NAME_SIMILAR_THRESHOLD:
+                        return 100.0, True
+            return 0.0, False
+
     # 0. STRICT NAME + SUBNETWORK RULE for STRICT_SUBNETWORK_DISTRIBUTORS (ТАНДЕР)
     # Outlets match IF AND ONLY IF both Name and Подсеть match identically!
     if (
@@ -340,6 +467,10 @@ class OutletsDeduplicator:
                 unmatched_distrib.append(d_rec)
 
         # Step 3: Match remaining distributor records among themselves
+        # Sort unmatched_distrib so that full-address records are evaluated before short-address records
+        # This ensures full records become group leaders and short records are attached as "Похожая"
+        unmatched_distrib.sort(key=lambda r: 1 if getattr(r, "is_globus_short", False) else 0)
+
         dist_index = defaultdict(list)
         for u_idx, d_rec in enumerate(unmatched_distrib):
             for key in d_rec.blocking_keys:
@@ -363,8 +494,13 @@ class OutletsDeduplicator:
                         if cand_idx not in visited_dist_indices:
                             candidates.add(cand_idx)
 
+            # Sort candidates so full-address records are evaluated before short-address records
+            sorted_candidates = sorted(
+                candidates,
+                key=lambda idx: 1 if getattr(unmatched_distrib[idx], "is_globus_short", False) else 0
+            )
             matched_cands: List[Tuple[OutletRecord, str, float]] = []
-            for cand_idx in candidates:
+            for cand_idx in sorted_candidates:
                 cand_rec = unmatched_distrib[cand_idx]
 
                 # Constraint: National networks only match within the SAME distributor
@@ -385,7 +521,7 @@ class OutletsDeduplicator:
 
             if matched_cands:
                 has_ident = any(s == STATUS_IDENTICAL for _, s, _ in matched_cands)
-                main_status = STATUS_IDENTICAL if has_ident else STATUS_SIMILAR
+                main_status = STATUS_IDENTICAL if (has_ident or not getattr(d_rec, "is_globus_short", False)) else STATUS_SIMILAR
                 current_group.append((d_rec, main_status, 100.0))
                 current_group.extend(matched_cands)
                 dist_groups.append(current_group)

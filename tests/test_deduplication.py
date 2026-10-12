@@ -686,3 +686,123 @@ def test_auchan_and_lenta_3digit_code_padding():
     assert res_l2[1] == STATUS_IDENTICAL
 
 
+def test_globus_hypermarket_full_and_short_address_matching():
+    """
+    For 'ГИПЕРГЛОБУС ООО (take-off)':
+    - Full-address records at the same hypermarket (e.g. 'Гипер Глобус Владимир 2', 'Глобус ВЛД', 'ВЛД', 'Владимир')
+      must ALL merge into the SAME group with STATUS_IDENTICAL (100%).
+    - A short-address record (Name: 'ВЛД', Addr: 'ВЛД') matching a full-address group must be added to that SAME
+      group, but marked as STATUS_SIMILAR.
+    """
+    dist = "ГИПЕРГЛОБУС ООО (take-off)"
+    # 4 full-address records at Suzdalskiy pr-kt 28
+    r_full1 = make_row(1, "Гипер Глобус  Владимир 2", "Владимир, Суздальский пр-т, д. 28,", 0, dist=dist, subnetwork="Ru_Globus")
+    r_full2 = make_row(2, "Владимир", "Владимир, Суздальский пр-т, д. 28,", 0, dist=dist, subnetwork="Ru_Globus")
+    r_full3 = make_row(3, "Глобус ВЛД", "Владимирская обл, Владимир г, Суздальский пр-кт, 28", 0, dist=dist, subnetwork="Ru_Globus")
+    r_full4 = make_row(4, "ВЛД", "Владимирская обл, Владимир г, Суздальский пр-кт, 28", 0, dist=dist, subnetwork="Ru_Globus")
+    # 1 short-address record
+    r_short = make_row(5, "ВЛД", "ВЛД", 0, dist=dist, subnetwork="Ru_Globus")
+
+    records = [
+        OutletRecord(0, r_full1, COL_INDICES),
+        OutletRecord(1, r_full2, COL_INDICES),
+        OutletRecord(2, r_full3, COL_INDICES),
+        OutletRecord(3, r_full4, COL_INDICES),
+        OutletRecord(4, r_short, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run(include_similarity=True)
+
+    assert len(results) == 5
+    # All 5 must share the exact same group ID!
+    group_ids = {r[0] for r in results}
+    assert len(group_ids) == 1
+
+    # Check statuses
+    res_full1 = [r for r in results if r[2][COL_INDICES['id']] == '1'][0]
+    res_full2 = [r for r in results if r[2][COL_INDICES['id']] == '2'][0]
+    res_full3 = [r for r in results if r[2][COL_INDICES['id']] == '3'][0]
+    res_full4 = [r for r in results if r[2][COL_INDICES['id']] == '4'][0]
+    res_short = [r for r in results if r[2][COL_INDICES['id']] == '5'][0]
+
+    assert res_full1[1] == STATUS_IDENTICAL
+    assert res_full1[3] == 100.0
+    assert res_full2[1] == STATUS_IDENTICAL
+    assert res_full2[3] == 100.0
+    assert res_full3[1] == STATUS_IDENTICAL
+    assert res_full3[3] == 100.0
+    assert res_full4[1] == STATUS_IDENTICAL
+    assert res_full4[3] == 100.0
+
+    # Short record is added to the group as SIMILAR
+    assert res_short[1] == STATUS_SIMILAR
+    assert res_short[3] == 75.0
+
+
+def test_globus_short_address_only_matching():
+    """
+    If there are only short-address records (no full-address counterpart in the dataset),
+    they merge with each other as STATUS_IDENTICAL.
+    """
+    dist = "ГИПЕРГЛОБУС ООО (take-off)"
+    r1 = make_row(10, "ОДН", "ОДН", 0, dist=dist, subnetwork="Ru_Globus")
+    r2 = make_row(20, "ОДН", "ОДН", 0, dist=dist, subnetwork="Ru_Globus")
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run(include_similarity=True)
+
+    assert len(results) == 2
+    assert results[0][0] == results[1][0]
+    assert results[0][1] == STATUS_IDENTICAL
+    assert results[1][1] == STATUS_IDENTICAL
+    assert results[0][3] == 100.0
+    assert results[1][3] == 100.0
+
+
+def test_globus_dynamic_acronym_matching_unknown_city():
+    """
+    Verify dynamic acronym matching for a new city not present in the dictionary.
+    E.g. abbreviation 'НКР' matches 'Некрасовка' at the same street/house.
+    """
+    dist = "ГИПЕРГЛОБУС ООО (take-off)"
+    r1 = make_row(100, "Глобус НКР", "Москва, Покровская ул, 10", 0, dist=dist, subnetwork="Ru_Globus")
+    r2 = make_row(200, "Гипер Глобус Некрасовка", "Москва г, ул. Покровская, дом 10", 0, dist=dist, subnetwork="Ru_Globus")
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run(include_similarity=True)
+
+    assert len(results) == 2
+    assert results[0][0] == results[1][0]
+    assert results[0][1] == STATUS_IDENTICAL
+    assert results[1][1] == STATUS_IDENTICAL
+
+
+def test_globus_different_cities_never_merge():
+    """
+    Different Globus stores (e.g. Vladimir vs Ryazan) must NEVER merge.
+    """
+    dist = "ГИПЕРГЛОБУС ООО (take-off)"
+    r_vld = make_row(1, "Глобус ВЛД", "Владимирская обл, Владимир г, Суздальский пр-кт, 28", 0, dist=dist, subnetwork="Ru_Globus")
+    r_ryaz = make_row(2, "Глобус РЯЗ", "Рязанская обл, Рязанский р-н, Дядьково с, 1", 0, dist=dist, subnetwork="Ru_Globus")
+
+    records = [
+        OutletRecord(0, r_vld, COL_INDICES),
+        OutletRecord(1, r_ryaz, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run()
+
+    assert len(results) == 2
+    assert results[0][0] != results[1][0]
+    assert results[0][1] == STATUS_UNIQUE
+    assert results[1][1] == STATUS_UNIQUE
+
+
