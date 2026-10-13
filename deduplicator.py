@@ -13,6 +13,7 @@ from config import (
     PAD_3DIGIT_CODE_NETWORKS,
     GLOBUS_DISTRIBUTOR,
     GLOBUS_CITY_ABBREVIATIONS,
+    DETSKIY_MIR_DISTRIBUTOR,
     STATUS_IDENTICAL,
     STATUS_SIMILAR,
     STATUS_UNIQUE,
@@ -26,6 +27,7 @@ from normalizer import (
     extract_store_code,
     clean_store_name,
     normalize_text,
+    extract_detskiy_mir_format,
 )
 
 
@@ -101,6 +103,7 @@ class OutletRecord:
         'is_national',
         'globus_code',
         'is_globus_short',
+        'dm_format',
     )
 
     def __init__(self, index: int, raw_row: tuple, col_indices: Dict[str, int]):
@@ -150,6 +153,9 @@ class OutletRecord:
 
         self.store_code = extract_store_code(self.name, self.distributor)
         self.clean_name = clean_store_name(self.name)
+        self.dm_format: str = ""
+        if self.distributor == DETSKIY_MIR_DISTRIBUTOR:
+            self.dm_format = extract_detskiy_mir_format(self.name)
 
         self.globus_code: Optional[str] = None
         self.is_globus_short: bool = False
@@ -170,6 +176,21 @@ class OutletRecord:
                     street_tokens=self.street_tokens,
                     store_code=self.store_code,
                 ))
+            self.blocking_keys = keys
+        elif self.distributor == DETSKIY_MIR_DISTRIBUTOR:
+            # Detskiy Mir outlets are strictly segmented by format ('ДМ', 'ДМ МИНИ', 'ЗОО', 'РЦ')
+            fmt = self.dm_format or "ДМ"
+            raw_keys = get_address_blocking_keys(
+                raw_addr=self.address,
+                store_name=self.name,
+                base_house=self.base_house,
+                city=self.city,
+                street_tokens=self.street_tokens,
+                store_code=self.store_code,
+            )
+            keys = [(f"dm_{fmt}_{k}", v) for k, v in raw_keys]
+            if len(self.clean_name.split()) >= 2:
+                keys.append((f"name_{self.distributor}_{self.clean_name}", "name"))
             self.blocking_keys = keys
         elif self.distributor in CODE_BASED_NETWORKS:
             # Code-based networks only match by store code!
@@ -199,6 +220,17 @@ class OutletRecord:
                 code = get_globus_location_code(self.name, self.address, street_col_val)
                 if code:
                     keys.append((f"globus_{code}", "globus_code"))
+            if self.subnetwork == "Ru_Детский мир" or "детский мир" in self.name.lower():
+                fmt = extract_detskiy_mir_format(self.name) or "ДМ"
+                for k, v in get_address_blocking_keys(
+                    raw_addr=self.address,
+                    store_name=self.name,
+                    base_house=self.base_house,
+                    city=self.city,
+                    street_tokens=self.street_tokens,
+                    store_code=self.store_code,
+                ):
+                    keys.append((f"dm_{fmt}_{k}", v))
             if self.store_code:
                 for net in CODE_BASED_NETWORKS:
                     c = self.store_code
@@ -285,6 +317,18 @@ def calculate_outlet_match_score(
                     token_set = fuzz.token_set_ratio(outlet1.clean_name, outlet2.clean_name)
                     if acronym_match or token_set >= NAME_SIMILAR_THRESHOLD:
                         return 100.0, True
+            return 0.0, False
+
+    # 0b. DETSKIY MIR FORMAT RULE: "ДМ", "ДМ МИНИ", "ЗОО", "РЦ" must match separately
+    if (
+        outlet1.distributor == DETSKIY_MIR_DISTRIBUTOR
+        or outlet2.distributor == DETSKIY_MIR_DISTRIBUTOR
+    ):
+        if not outlet1.is_vendor and not outlet2.is_vendor and outlet1.distributor != outlet2.distributor:
+            return 0.0, False
+        f1 = outlet1.dm_format or extract_detskiy_mir_format(outlet1.name) or "ДМ"
+        f2 = outlet2.dm_format or extract_detskiy_mir_format(outlet2.name) or "ДМ"
+        if f1 != f2:
             return 0.0, False
 
     # 0. STRICT NAME + SUBNETWORK RULE for STRICT_SUBNETWORK_DISTRIBUTORS (ТАНДЕР)

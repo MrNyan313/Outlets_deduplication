@@ -1,7 +1,8 @@
 import pytest
 from normalizer import (
     extract_house_components, extract_store_code,
-    clean_store_name, extract_address_details, get_address_blocking_keys
+    clean_store_name, extract_address_details, get_address_blocking_keys,
+    extract_detskiy_mir_format
 )
 
 def test_house_extraction():
@@ -81,5 +82,17 @@ def test_date_street_house_extraction_and_region_detection():
     base_h_reg, _, city_reg, streets_reg = extract_address_details("Россия, Тюменская обл, Заводоуковск г")
     assert "тюменская" not in streets_reg
     assert city_reg == "заводоуковск"
+
+
+def test_extract_detskiy_mir_format():
+    assert extract_detskiy_mir_format("ДМ Видное Ларец") == "ДМ"
+    assert extract_detskiy_mir_format("ДМ МИНИ Медногорск на Гайдара") == "ДМ МИНИ"
+    assert extract_detskiy_mir_format("ЗОО ТАМБОВ КАРЛА МАРКСА 2947") == "ЗОО"
+    assert extract_detskiy_mir_format("РЦ \"Крёкшино-ИМ\"") == "РЦ"
+    assert extract_detskiy_mir_format("дм мини самара") == "ДМ МИНИ"
+    assert extract_detskiy_mir_format("зоо москва") == "ЗОО"
+    assert extract_detskiy_mir_format("рц бекасово") == "РЦ"
+    assert extract_detskiy_mir_format("Магазин Продукты") == ""
+
 
 

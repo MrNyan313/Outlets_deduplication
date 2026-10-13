@@ -263,6 +263,25 @@ def clean_store_name(name: str) -> str:
     return ' '.join(cleaned)
 
 
+def extract_detskiy_mir_format(name: str) -> str:
+    """
+    Extracts store format prefix for 'ДЕТСКИЙ МИР ПАО'.
+    Returns one of: 'ДМ МИНИ', 'ДМ', 'ЗОО', 'РЦ', or ''.
+    """
+    if not name:
+        return ""
+    n = str(name).strip().upper().replace("Ё", "Е")
+    if re.match(r'^ДМ\s+МИНИ\b', n):
+        return "ДМ МИНИ"
+    if re.match(r'^ДМ\b', n):
+        return "ДМ"
+    if re.match(r'^ЗОО\b', n):
+        return "ЗОО"
+    if re.match(r'^РЦ\b', n):
+        return "РЦ"
+    return ""
+
+
 def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     """
     Extracts normalized address details:

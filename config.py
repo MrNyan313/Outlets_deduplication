@@ -50,6 +50,10 @@ PAD_3DIGIT_CODE_NETWORKS = {
     "Лента ООО (take-off) с 01.04.2018",
 }
 
+# Detskiy Mir distributor and store format prefixes
+DETSKIY_MIR_DISTRIBUTOR = "ДЕТСКИЙ МИР ПАО"
+DETSKIY_MIR_FORMATS = ("ДМ МИНИ", "ДМ", "ЗОО", "РЦ")
+
 # Globus hypermarket distributor and known location abbreviations
 GLOBUS_DISTRIBUTOR = "ГИПЕРГЛОБУС ООО (take-off)"
 

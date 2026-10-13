@@ -991,6 +991,44 @@ def test_detskiy_mir_identical_name_incomplete_address_matches_as_similar():
     assert res_vor1[0] != res_ekb1[0]
 
 
+def test_detskiy_mir_format_separation():
+    """
+    Outlets of 'ДЕТСКИЙ МИР ПАО' with different format prefixes
+    ('ДМ', 'ДМ МИНИ', 'ЗОО', 'РЦ') must NEVER merge with each other,
+    even at the identical physical address.
+    """
+    dist = "ДЕТСКИЙ МИР ПАО"
+    # Case 1: ДМ vs ЗОО at the exact same address (Видное, ул. Радужная, 2)
+    r1 = make_row(101, "ДМ Видное Ларец", "Видное, Московской обл.,ул.Радужная,2", 0, dist=dist, subnetwork="Ru_Детский мир")
+    r2 = make_row(102, "ЗОО Видное Ларец", "Видное,ул.Радужная,2", 0, dist=dist, subnetwork="Ru_Детский мир")
+
+    # Case 2: ДМ vs ДМ МИНИ at the same address
+    r3 = make_row(103, "ДМ Самара Аврора", "Самара, Аэродромная ул, д. 47", 0, dist=dist, subnetwork="Ru_Детский мир")
+    r4 = make_row(104, "ДМ МИНИ Самара Аврора", "Самара, Аэродромная ул, д. 47", 0, dist=dist, subnetwork="Ru_Детский мир")
+
+    # Case 3: ДМ vs РЦ
+    r5 = make_row(105, "РЦ Крёкшино-ИМ", "д.Крекшино, Терминальный пр-зд, стр.4", 0, dist=dist, subnetwork="Ru_Детский мир")
+    r6 = make_row(106, "ДМ Крёкшино-ИМ", "д.Крекшино, Терминальный пр-зд, стр.4", 0, dist=dist, subnetwork="Ru_Детский мир")
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+        OutletRecord(2, r3, COL_INDICES),
+        OutletRecord(3, r4, COL_INDICES),
+        OutletRecord(4, r5, COL_INDICES),
+        OutletRecord(5, r6, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run(include_similarity=True)
+
+    # Every outlet must be in its own separate unique group
+    group_ids = [r[0] for r in results]
+    assert len(set(group_ids)) == 6
+    for r in results:
+        assert r[1] == STATUS_UNIQUE
+
+
+
 
 
 
