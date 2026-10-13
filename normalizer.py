@@ -49,9 +49,11 @@ MAJOR_CITIES = {
     'орел', 'орёл'
 }
 
+STREET_TYPES = r'(?:ул|улица|пр-кт|проспект|пр-д|проезд|пр|пер|переулок|бул|бульвар|шоссе|ш|наб|набережная|пл|площадь|аллея|тракт|тупик)'
+
 STREET_PATTERNS = [
-    r'\b(?:ул|улица|пр-кт|проспект|проезд|пер|переулок|бул|бульвар|шоссе|ш|наб|набережная|аллея|тракт|тупик)\.?\s*([а-яa-z0-9\-]+(?:\s+[а-яa-z0-9\-]+){0,2})',
-    r'([а-яa-z0-9\-]+(?:\s+[а-яa-z0-9\-]+){0,2})\s*\b(?:ул|улица|пр-кт|проспект|проезд|пер|переулок|бул|бульвар|шоссе|ш|наб|набережная|аллея|тракт|тупик)\b'
+    rf'\b{STREET_TYPES}(?:\.\s*|\s+)([а-яa-z0-9\-]+(?:\s+[а-яa-z0-9\-]+){{0,2}})',
+    rf'([а-яa-z0-9\-]+(?:\s+[а-яa-z0-9\-]+){{0,2}})[,\s]+\b{STREET_TYPES}(?:\.|\b)'
 ]
 
 # Mapping Cyrillic lookalikes to Latin for store codes
@@ -312,7 +314,10 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
         if m:
             cand = m.group(1).strip()
             cand = re.sub(r'^\d+\s*|\s*\d+$', '', cand).strip()
-            words = [w for w in re.findall(r'[а-яa-z0-9]+', cand) if len(w) >= 3 and w not in ADDRESS_STOP_WORDS and w not in settlement_words]
+            words = [
+                w for w in re.findall(r'[а-яa-z0-9]+', cand)
+                if len(w) >= 3 and w not in ADDRESS_STOP_WORDS and w not in settlement_words and not any(c.isdigit() for c in w)
+            ]
             if words:
                 street_words = words
                 break
@@ -321,7 +326,7 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     if not street_words:
         all_words = re.findall(r'[а-яa-z0-9]+', addr_clean)
         for w in all_words:
-            if len(w) >= 3 and w not in ADDRESS_STOP_WORDS and w not in settlement_words:
+            if len(w) >= 3 and w not in ADDRESS_STOP_WORDS and w not in settlement_words and not any(c.isdigit() for c in w):
                 if not city or w not in city.split():
                     street_words.append(w)
 

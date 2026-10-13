@@ -53,3 +53,20 @@ def test_blocking_keys():
     # verify base house is '5' in all keys
     for token, base_h in keys:
         assert base_h == "5"
+
+
+def test_extract_address_details_city_prefix_not_treated_as_street():
+    base_h1, full_h1, city1, streets1 = extract_address_details("Набережные Челны,Сююмбике пр-кт,2/19")
+    assert city1 == "набережные челны"
+    assert "сююмбике" in streets1
+    assert "ережные" not in streets1
+    assert base_h1 == "2"
+    assert full_h1 == "2/19"
+
+    base_h2, full_h2, city2, streets2 = extract_address_details("Набережные Челны,наб.Габдуллы Тукая,2")
+    assert city2 == "набережные челны"
+    assert "тукая" in streets2 or "габдуллы" in streets2
+    assert "ережные" not in streets2
+    assert base_h2 == "2"
+    assert full_h2 == "2"
+

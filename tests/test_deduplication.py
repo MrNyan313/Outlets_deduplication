@@ -882,5 +882,43 @@ def test_detskiy_mir_different_streets_and_names_never_merge():
     assert results[1][1] == STATUS_UNIQUE
 
 
+def test_detskiy_mir_naberezhnye_chelny_different_streets_never_merge():
+    """
+    Two Detskiy Mir outlets in Naberezhnye Chelny with base house '2'
+    on different streets (Сююмбике пр-кт vs наб. Габдуллы Тукая)
+    must NEVER merge into the same group.
+    """
+    dist = "ДЕТСКИЙ МИР ПАО"
+    r1 = make_row(
+        323696223217289820,
+        "ДМ Набережные Челны Омега",
+        "Набережные Челны,Сююмбике пр-кт,2/19",
+        0,
+        dist=dist,
+        subnetwork="Ru_Детский мир"
+    )
+    r2 = make_row(
+        323696223217290599,
+        "ДМ Набережные Челны Эссен",
+        "Набережные Челны,наб.Габдуллы Тукая,2",
+        0,
+        dist=dist,
+        subnetwork="Ru_Детский мир"
+    )
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run(include_similarity=True)
+
+    assert len(results) == 2
+    assert results[0][0] != results[1][0]
+    assert results[0][1] == STATUS_UNIQUE
+    assert results[1][1] == STATUS_UNIQUE
+
+
+
 
 
