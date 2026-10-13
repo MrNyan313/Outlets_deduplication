@@ -221,10 +221,13 @@ class OutletRecord:
                 street_tokens=self.street_tokens,
                 store_code=self.store_code,
             ))
+            if len(self.clean_name.split()) >= 2:
+                for dist in NATIONAL_NETWORKS:
+                    keys.append((f"name_{dist}_{self.clean_name}", "name"))
             self.blocking_keys = keys
         else:
             # Regular distributor outlets
-            self.blocking_keys = get_address_blocking_keys(
+            keys = get_address_blocking_keys(
                 raw_addr=self.address,
                 store_name=self.name,
                 base_house=self.base_house,
@@ -232,6 +235,9 @@ class OutletRecord:
                 street_tokens=self.street_tokens,
                 store_code=self.store_code,
             )
+            if len(self.clean_name.split()) >= 2:
+                keys.append((f"name_{self.distributor}_{self.clean_name}", "name"))
+            self.blocking_keys = keys
 
 
 def calculate_outlet_match_score(
@@ -363,8 +369,6 @@ def calculate_outlet_match_score(
             return 0.0, False
         if not street_overlap and street_fuzzy < 70:
             return 0.0, False
-    elif not street_overlap and street_fuzzy < 70:
-        return 0.0, False
 
     # 2c. City check: if both cities are identified, they must not conflict
     city_overlap = False
@@ -405,11 +409,13 @@ def calculate_outlet_match_score(
 
     # Without store codes: if physical location is incomplete (missing house, missing street, or unverified city),
     # different-named stores cannot be assumed to be identical/similar. They require high name similarity (>= 90).
+    has_real_house = bool(has_num1 and has_num2 and outlet1.base_house == outlet2.base_house)
+    has_real_street = bool(s_set1 and s_set2 and street_overlap)
+    has_real_city = bool(outlet1.city and outlet2.city and city_overlap)
+    is_complete_location = bool(has_real_house and has_real_street and has_real_city)
+
     if not code_match:
-        has_real_house = bool(has_num1 and has_num2 and outlet1.base_house == outlet2.base_house)
-        has_real_street = bool(s_set1 and s_set2 and street_overlap)
-        has_real_city = bool(outlet1.city and outlet2.city and city_overlap)
-        if not (has_real_house and has_real_street and has_real_city):
+        if not is_complete_location:
             if name_score < 90:
                 return 0.0, False
 
@@ -418,10 +424,16 @@ def calculate_outlet_match_score(
     house_match = (outlet1.full_house == outlet2.full_house)
 
     if is_national:
-        # For national networks: code match or high name match (>=90) -> exact
+        # If physical location is incomplete (e.g. missing street or house),
+        # even with identical/high name similarity, mark as "Похожая" (STATUS_SIMILAR, 75.0%)
+        if not is_complete_location and not code_match:
+            return 75.0, False
+        # For national networks: code match or high name match (>=90) with complete location -> exact
         is_exact = (code_match or name_score >= 90)
     else:
         # For regular distributors:
+        if not is_complete_location and not code_match:
+            return 75.0, False
         # Even if store code matches, if the legal entity / brand name differs
         # (e.g. "Люкс" vs "Перминов В.В ИП"), it must be marked as "Похожая".
         # Exact match requires name similarity >= 95 and same full house.

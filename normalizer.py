@@ -139,8 +139,12 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
         lit = m3.group(2) or ''
         return base_num, base_num + lit
 
+    # Strip date/anniversary numbers (e.g. "8 марта", "9 мая", "1905 года") so they are not treated as house numbers
+    pat_date = r'\b\d+[- ]*(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря|года|лет(?:\s+[а-яa-z]+)?)\b'
+    t_no_date = re.sub(pat_date, '', t, flags=re.IGNORECASE)
+
     # 4. Number at end of address string or after comma: e.g. "Татищева бульвар, 6а" or "ул 21"
-    m4 = re.search(r'[, ]+(\d+)\s*([а-яa-z])?(?:\s*[/\\-]\s*(\d+[а-яa-z]?))?\s*$', t)
+    m4 = re.search(r'[, ]+(\d+)\s*([а-яa-z])?(?:\s*[/\\-]\s*(\d+[а-яa-z]?))?\s*$', t_no_date)
     if m4:
         base_num = m4.group(1)
         lit = m4.group(2) or ''
@@ -151,7 +155,7 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
         return base_num, full
 
     # 5. Standalone number that is not postal code
-    nums = re.findall(r'\b(\d+([а-яa-z])?)\b', t)
+    nums = re.findall(r'\b(\d+([а-яa-z])?)\b', t_no_date)
     if nums:
         val = nums[-1][0]
         base = re.match(r'\d+', val).group(0)
@@ -296,6 +300,16 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
                 settlement_words.add(w)
                 if not city and w not in ADDRESS_STOP_WORDS and not w.isdigit():
                     city = w
+
+    # Detect administrative regions and districts to prevent them from leaking into street tokens
+    for pat in [
+        r'\b([а-яa-z0-9\-]+)\s+(?:обл|область|край|респ|республика|р-н|район|округ|ао)\b',
+        r'\b(?:обл|область|край|респ|республика|р-н|район|округ|ао)\.?\s*([а-яa-z0-9\-]+)',
+    ]:
+        for m in re.finditer(pat, addr_clean):
+            w = m.group(1).strip()
+            if w not in {'ул', 'улица', 'дом', 'стр', 'корп', 'кв', 'пом'}:
+                settlement_words.add(w)
 
     # Detect city from comma-separated parts if not found
     for part in parts:

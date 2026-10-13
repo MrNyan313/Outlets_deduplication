@@ -919,6 +919,79 @@ def test_detskiy_mir_naberezhnye_chelny_different_streets_never_merge():
     assert results[1][1] == STATUS_UNIQUE
 
 
+def test_detskiy_mir_identical_name_incomplete_address_matches_as_similar():
+    """
+    Detskiy Mir outlets with 100% identical store names but incomplete physical address
+    (e.g. city only vs street only) must merge into the same group with STATUS_SIMILAR (75.0%).
+    """
+    dist = "ДЕТСКИЙ МИР ПАО"
+    # Pair 1: Voronezh Lastochkino
+    r1 = make_row(
+        323696223230757975,
+        "ДМ Воронеж Ласточкино",
+        "г Воронеж",
+        0,
+        dist=dist,
+        subnetwork="Ru_Детский мир"
+    )
+    r2 = make_row(
+        323696223234410929,
+        "ДМ Воронеж Ласточкино",
+        "Острогожская",
+        0,
+        dist=dist,
+        subnetwork="Ru_Детский мир"
+    )
+    # Pair 2: Yekaterinburg Megapolis
+    r3 = make_row(
+        323696223230757987,
+        "ДМ Екатеринбург Мегаполис",
+        "г Екатеринбург",
+        0,
+        dist=dist,
+        subnetwork="Ru_Детский мир"
+    )
+    r4 = make_row(
+        323696223234410937,
+        "ДМ Екатеринбург Мегаполис",
+        "8 марта",
+        0,
+        dist=dist,
+        subnetwork="Ru_Детский мир"
+    )
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+        OutletRecord(2, r3, COL_INDICES),
+        OutletRecord(3, r4, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run(include_similarity=True)
+
+    assert len(results) == 4
+
+    # Pair 1 must be in the same group
+    res_vor1 = [r for r in results if r[2][COL_INDICES['id']] == '323696223230757975'][0]
+    res_vor2 = [r for r in results if r[2][COL_INDICES['id']] == '323696223234410929'][0]
+    assert res_vor1[0] == res_vor2[0]
+    assert res_vor1[1] == STATUS_IDENTICAL
+    assert res_vor2[1] == STATUS_SIMILAR
+    assert res_vor2[3] == 75.0
+
+    # Pair 2 must be in the same group
+    res_ekb1 = [r for r in results if r[2][COL_INDICES['id']] == '323696223230757987'][0]
+    res_ekb2 = [r for r in results if r[2][COL_INDICES['id']] == '323696223234410937'][0]
+    assert res_ekb1[0] == res_ekb2[0]
+    assert res_ekb1[1] == STATUS_IDENTICAL
+    assert res_ekb2[1] == STATUS_SIMILAR
+    assert res_ekb2[3] == 75.0
+
+    # Pairs must be in different groups from each other
+    assert res_vor1[0] != res_ekb1[0]
+
+
+
 
 
 

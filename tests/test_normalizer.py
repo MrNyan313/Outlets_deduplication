@@ -70,3 +70,16 @@ def test_extract_address_details_city_prefix_not_treated_as_street():
     assert base_h2 == "2"
     assert full_h2 == "2"
 
+
+def test_date_street_house_extraction_and_region_detection():
+    # "8 марта" without explicit house must not extract 8 as house
+    base_h, full_h = extract_house_components("8 марта")
+    assert base_h == "б/н"
+    assert full_h == "б/н"
+
+    # Address with region name must not extract region as street
+    base_h_reg, _, city_reg, streets_reg = extract_address_details("Россия, Тюменская обл, Заводоуковск г")
+    assert "тюменская" not in streets_reg
+    assert city_reg == "заводоуковск"
+
+
