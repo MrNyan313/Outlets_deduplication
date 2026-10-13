@@ -94,6 +94,22 @@ NAME_SIMILAR_THRESHOLD = 68
 # Output options
 INCLUDE_SIMILARITY_PERCENT: bool = True
 
+# Border agglomeration city groups for major highways / ring roads
+BORDER_AGGLOMERATIONS = [
+    # Moscow & near Moscow Oblast satellite cities
+    {
+        "москва", "красногорск", "химки", "мытищи", "люберцы", "котельники",
+        "реутов", "видное", "одинцово", "ленинский", "балашиха", "дзержинский",
+        "подольск", "долгопрудный", "отрадное", "мо", "московская"
+    },
+    # Saint Petersburg & Leningrad Oblast border districts / settlements
+    {
+        "санкт-петербург", "петербург", "спб", "ленинградская", "ло", "ломоносовский", "всеволожский",
+        "всеволожск", "кудрово", "мурино", "виллози", "гатчинский", "гатчина",
+        "старо-паново", "паново"
+    }
+]
+
 # Output filename pattern
 OUTPUT_FILENAME_PATTERN = "Deduplication_results-%Y%m%d%H%M.xlsx"
 

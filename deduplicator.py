@@ -19,6 +19,7 @@ from config import (
     STATUS_UNIQUE,
     NAME_EXACT_THRESHOLD,
     NAME_SIMILAR_THRESHOLD,
+    BORDER_AGGLOMERATIONS,
 )
 from normalizer import (
     extract_address_details,
@@ -28,6 +29,8 @@ from normalizer import (
     clean_store_name,
     normalize_text,
     extract_detskiy_mir_format,
+    extract_km,
+    stem_street_token,
 )
 
 
@@ -104,6 +107,7 @@ class OutletRecord:
         'globus_code',
         'is_globus_short',
         'dm_format',
+        'km',
     )
 
     def __init__(self, index: int, raw_row: tuple, col_indices: Dict[str, int]):
@@ -151,6 +155,13 @@ class OutletRecord:
                     if not self.street_tokens and st_tokens:
                         self.street_tokens = st_tokens
 
+        # Extract kilometer marker from address, Street column, or Name
+        self.km = extract_km(self.address)
+        if not self.km and street_col_val:
+            self.km = extract_km(street_col_val)
+        if not self.km and self.name:
+            self.km = extract_km(self.name)
+
         self.store_code = extract_store_code(self.name, self.distributor)
         self.clean_name = clean_store_name(self.name)
         self.dm_format: str = ""
@@ -175,6 +186,7 @@ class OutletRecord:
                     city=self.city,
                     street_tokens=self.street_tokens,
                     store_code=self.store_code,
+                    km=self.km,
                 ))
             self.blocking_keys = keys
         elif self.distributor == DETSKIY_MIR_DISTRIBUTOR:
@@ -187,6 +199,7 @@ class OutletRecord:
                 city=self.city,
                 street_tokens=self.street_tokens,
                 store_code=self.store_code,
+                km=self.km,
             )
             keys = [(f"dm_{fmt}_{k}", v) for k, v in raw_keys]
             if len(self.clean_name.split()) >= 2:
@@ -229,6 +242,7 @@ class OutletRecord:
                     city=self.city,
                     street_tokens=self.street_tokens,
                     store_code=self.store_code,
+                    km=self.km,
                 ):
                     keys.append((f"dm_{fmt}_{k}", v))
             if self.store_code:
@@ -252,6 +266,7 @@ class OutletRecord:
                 city=self.city,
                 street_tokens=self.street_tokens,
                 store_code=self.store_code,
+                km=self.km,
             ))
             if len(self.clean_name.split()) >= 2:
                 for dist in NATIONAL_NETWORKS:
@@ -266,6 +281,7 @@ class OutletRecord:
                 city=self.city,
                 street_tokens=self.street_tokens,
                 store_code=self.store_code,
+                km=self.km,
             )
             if len(self.clean_name.split()) >= 2:
                 keys.append((f"name_{self.distributor}_{self.clean_name}", "name"))
@@ -388,6 +404,10 @@ def calculate_outlet_match_score(
         return 0.0, False
 
     # 2. Geographic checks: outlets must be at the same physical location
+    # KM check: if both outlets have explicit km markers and they conflict (e.g. 7-й км vs 24-й км), reject!
+    if outlet1.km and outlet2.km and outlet1.km != outlet2.km:
+        return 0.0, False
+
     # 2a. House check: If both outlets have explicit house numbers (neither is "б/н"),
     # different house numbers can NEVER merge!
     has_num1 = bool(outlet1.base_house and outlet1.base_house != "б/н")
@@ -399,7 +419,9 @@ def calculate_outlet_match_score(
     # 2b. Street check: must have at least one overlapping street token or high fuzzy match
     s_set1 = set(outlet1.street_tokens)
     s_set2 = set(outlet2.street_tokens)
-    street_overlap = bool(s_set1 and s_set2 and (s_set1 & s_set2))
+    s_stem1 = {stem_street_token(s) for s in outlet1.street_tokens}
+    s_stem2 = {stem_street_token(s) for s in outlet2.street_tokens}
+    street_overlap = bool((s_set1 and s_set2 and (s_set1 & s_set2)) or (s_stem1 and s_stem2 and (s_stem1 & s_stem2)))
 
     street_str1 = ' '.join(outlet1.street_tokens)
     street_str2 = ' '.join(outlet2.street_tokens)
@@ -408,8 +430,10 @@ def calculate_outlet_match_score(
     if s_set1 and s_set2:
         diff1 = s_set1 - s_set2
         diff2 = s_set2 - s_set1
+        stem_diff1 = s_stem1 - s_stem2
+        stem_diff2 = s_stem2 - s_stem1
         # If both addresses have distinct specific street tokens and street similarity is low, they conflict!
-        if diff1 and diff2 and street_fuzzy < 70:
+        if stem_diff1 and stem_diff2 and street_fuzzy < 70:
             return 0.0, False
         if not street_overlap and street_fuzzy < 70:
             return 0.0, False
@@ -421,8 +445,21 @@ def calculate_outlet_match_score(
         c_set2 = set(outlet2.city.split())
         city_overlap = bool(c_set1 & c_set2)
         city_fuzzy = fuzz.token_sort_ratio(outlet1.city, outlet2.city)
+
+        is_border_match = False
         if not city_overlap and city_fuzzy < 65:
-            return 0.0, False
+            # Check border agglomerations (Moscow / satellite cities, SPb / Leningrad Oblast)
+            for agg in BORDER_AGGLOMERATIONS:
+                if any(c in agg for c in c_set1) and any(c in agg for c in c_set2):
+                    if (outlet1.is_national or outlet2.is_national) and (
+                        (street_overlap and (has_num1 and has_num2 and outlet1.base_house == outlet2.base_house)) or
+                        (outlet1.km and outlet2.km and outlet1.km == outlet2.km)
+                    ):
+                        is_border_match = True
+                        city_overlap = True
+                        break
+            if not is_border_match:
+                return 0.0, False
 
     # 3. Store name and code checks
     name1 = outlet1.clean_name
@@ -453,10 +490,18 @@ def calculate_outlet_match_score(
 
     # Without store codes: if physical location is incomplete (missing house, missing street, or unverified city),
     # different-named stores cannot be assumed to be identical/similar. They require high name similarity (>= 90).
+    addresses_identical = bool(outlet1.address and outlet2.address and outlet1.address == outlet2.address)
     has_real_house = bool(has_num1 and has_num2 and outlet1.base_house == outlet2.base_house)
-    has_real_street = bool(s_set1 and s_set2 and street_overlap)
+    has_real_street = bool((s_set1 and s_set2 and street_overlap) or (s_stem1 and s_stem2 and street_overlap))
     has_real_city = bool(outlet1.city and outlet2.city and city_overlap)
-    is_complete_location = bool(has_real_house and has_real_street and has_real_city)
+    has_real_km = bool(outlet1.km and outlet2.km and outlet1.km == outlet2.km)
+    location_without_city = bool((not outlet1.city or not outlet2.city) and has_real_street and has_real_house)
+
+    is_complete_location = bool(
+        addresses_identical or
+        (has_real_house and has_real_street and (has_real_city or location_without_city)) or
+        (has_real_km and street_overlap and (has_real_house or has_real_city))
+    )
 
     if not code_match:
         if not is_complete_location:

@@ -24,11 +24,12 @@ REGION_WORDS = {
 
 # Stop words in address parsing
 ADDRESS_STOP_WORDS = REGION_WORDS | {
-    'г', 'город', 'пгт', 'рп', 'п', 'поселок', 'пос', 'д', 'деревня',
+    'г', 'город', 'пгт', 'рп', 'гп', 'сп', 'п', 'поселок', 'пос', 'д', 'деревня',
     'с', 'село', 'ст', 'станица', 'х', 'хутор', 'с/с', 'с/совет',
     'ул', 'улица', 'пркт', 'проспект', 'пр', 'проезд', 'пер', 'переулок',
     'бул', 'бульвар', 'ш', 'шоссе', 'наб', 'набережная', 'пл', 'площадь',
     'тракт', 'линия', 'аллея', 'тупик', 'кв-л', 'квартал', 'мкр', 'микрорайон',
+    'автодорога', 'а/д', 'территория', 'тер', 'км', 'километр',
     'дом', 'кв', 'пом', 'стр', 'корп', 'здание', 'зд', 'корпус', 'строение',
     'литера', 'лит', 'помещение', 'комн', 'оф', 'офис', 'эт', 'этаж',
     'ссив', 'дискаунтер', 'гипермаркет', 'супермаркет'
@@ -49,7 +50,7 @@ MAJOR_CITIES = {
     'орел', 'орёл'
 }
 
-STREET_TYPES = r'(?:ул|улица|пр-кт|проспект|пр-д|проезд|пр|пер|переулок|бул|бульвар|шоссе|ш|наб|набережная|пл|площадь|аллея|тракт|тупик)'
+STREET_TYPES = r'(?:ул|улица|пр-кт|проспект|пр-д|проезд|пр|пер|переулок|бул|бульвар|шоссе|ш|наб|набережная|пл|площадь|аллея|тракт|тупик|автодорога|а/д)'
 
 STREET_PATTERNS = [
     rf'\b{STREET_TYPES}(?:\.\s*|\s+)([а-яa-z0-9\-]+(?:\s+[а-яa-z0-9\-]+){{0,2}})',
@@ -67,6 +68,56 @@ def normalize_text(text: str) -> str:
     t = str(text).lower().replace("ё", "е")
     t = re.sub(r'[\s\u00a0\u202f]+', ' ', t)
     return t.strip()
+
+
+def extract_km(text: str) -> str:
+    """
+    Extracts kilometer marker from an address or store name string.
+    e.g. '7-й км, 2' -> '7'
+         '7-й (автодорога Пятницкое шоссе тер.) км, 2' -> '7'
+         '7 км Пятницкого ш.' -> '7'
+         '24й км. МКАД' -> '24'
+         'Московское ш., 18 км' -> '18'
+         'км 12' -> '12'
+    """
+    if not text:
+        return ""
+    t = normalize_text(text)
+    # 1. '7-й км', '7 км', '24й км', '18-й километр' (supports parenthetical insertions like '7-й (...) км')
+    m1 = re.search(
+        r'(?:^|[,\s(])(\d+)[- ]*(?:й|ой|ий|ый|ая)?\s*(?:\([^)]*\)\s*)?(?:км|километр)\b',
+        t, re.IGNORECASE
+    )
+    if m1:
+        return m1.group(1)
+    # 2. 'км 7', 'километр 12'
+    m2 = re.search(r'\b(?:км|километр)\.?\s*(\d+)\b', t, re.IGNORECASE)
+    if m2:
+        return m2.group(1)
+    return ""
+
+
+def stem_street_token(token: str) -> str:
+    """
+    Stems Russian street/highway adjective endings to a canonical root.
+    e.g. 'пятницкое' / 'пятницкого' -> 'пятницк'
+         'таллинское' / 'таллинского' -> 'таллин'
+         'московское' / 'московского' -> 'москов'
+         'осташковское' / 'осташковского' -> 'осташков'
+         'октябрьская' / 'октябрьской' -> 'октябрь'
+    """
+    if not token:
+        return ""
+    t = token.lower()
+    for suffix in (
+        'ского', 'ской', 'ском', 'ское', 'ская', 'ский', 'скому', 'скую', 'ские', 'ских',
+        'ного', 'ной', 'ном', 'ное', 'ная', 'ный', 'ному', 'ную', 'ные', 'ных',
+        'ового', 'овой', 'овом', 'овое', 'овая', 'овый', 'овому', 'овую', 'овые', 'овых',
+        'ого', 'ому', 'ым', 'им', 'ом', 'ем', 'ой', 'ей', 'ая', 'яя', 'ое', 'ее', 'ый', 'ий', 'ые', 'ие', 'ую', 'юю'
+    ):
+        if t.endswith(suffix) and len(t) - len(suffix) >= 3:
+            return t[:-len(suffix)]
+    return t
 
 
 def extract_house_components(addr: str) -> Tuple[str, str]:
@@ -93,6 +144,10 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
 
     # Strip trailing annotations in parentheses like "(А)", "(К)", "(пом. 3)"
     t = re.sub(r'[\s,]*\([а-яa-z0-9\s\.\-]+\)\s*$', '', t).strip()
+
+    # Mask km phrases (e.g. "7-й км", "24 км", "км 18") so kilometer numbers are not mistaken for house numbers
+    pat_km = r'(?:^|[,\s(])\d+[- ]*(?:й|ой|ий|ый|ая)?\s*(?:\([^)]*\)\s*)?(?:км|километр)\b|\b(?:км|километр)\.?\s*\d+\b'
+    t = re.sub(pat_km, ' ', t, flags=re.IGNORECASE)
 
     # Cut off interior unit info (apartment, office, room)
     t = re.split(r'\b(?:кв|квартира|пом|помещение|комн|оф|офис|эт|этаж)\b', t)[0].strip()
@@ -144,6 +199,8 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     t_no_date = re.sub(pat_date, '', t, flags=re.IGNORECASE)
 
     # 4. Number at end of address string or after comma: e.g. "Татищева бульвар, 6а" or "ул 21"
+    # Strip trailing punctuation before checking end of string
+    t_no_date = t_no_date.rstrip(' ,.;')
     m4 = re.search(r'[, ]+(\d+)\s*([а-яa-z])?(?:\s*[/\\-]\s*(\d+[а-яa-z]?))?\s*$', t_no_date)
     if m4:
         base_num = m4.group(1)
@@ -249,7 +306,8 @@ def extract_store_code(name: str, distributor: str = "") -> str:
 
 def clean_store_name(name: str) -> str:
     """
-    Cleans a store name by removing legal forms (ООО, ИП), punctuation, and initials.
+    Cleans a store name by removing legal forms (ООО, ИП), punctuation, initials,
+    and trailing/embedded kilometer markers so store names match across formats.
     """
     if not name:
         return ""
@@ -258,6 +316,8 @@ def clean_store_name(name: str) -> str:
     t = re.sub(r'["\'\(\)\[\]«»„“”№#_]', ' ', t)
     # Remove person initials like "в.в.", "е.а."
     t = re.sub(r'\b[а-яa-z]\s*\.\s*[а-яa-z]?\s*\.?', ' ', t)
+    # Remove km phrases (e.g. "7 км", "7-й км") so "ГМ Москва Пятницкое 7 км" -> "гм москва пятницкое"
+    t = re.sub(r'\b\d+[- ]*(?:й|ой|ий|ый|ая)?\s*(?:км|километр)\b', ' ', t, flags=re.IGNORECASE)
     words = re.findall(r'[а-яa-z0-9]+', t)
     cleaned = [w for w in words if w not in LEGAL_FORMS]
     return ' '.join(cleaned)
@@ -292,8 +352,13 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     t = re.sub(r'[\s,]*\([а-яa-z0-9\s\.\-]+\)\s*$', '', t).strip()
     base_house, full_house = extract_house_components(t)
 
-    # Clean address from postal code and house
+    # Clean address from postal code and unroll internal parentheses to clauses
     addr_clean = re.sub(r'\b\d{6}\b', '', t)
+    addr_clean = addr_clean.replace('(', ' , ').replace(')', ' , ')
+    # Mask km phrases before street extraction so km digits/units don't pollute street tokens
+    pat_km = r'(?:^|[,\s(])\d+[- ]*(?:й|ой|ий|ый|ая)?\s*(?:\([^)]*\)\s*)?(?:км|километр)\b|\b(?:км|километр)\.?\s*\d+\b'
+    addr_clean_no_km = re.sub(pat_km, ' ', addr_clean, flags=re.IGNORECASE)
+
     parts = [p.strip() for p in addr_clean.split(',') if p.strip()]
 
     city = ""
@@ -308,10 +373,10 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
 
     # Check settlement indicators
     for pat in [
-        r'\b(?:город|поселок|пос|село|деревня|станица|хутор|пгт|рп)\.?\s*([а-яa-z0-9\-]+)',
+        r'\b(?:город|поселок|пос|село|деревня|станица|хутор|пгт|рп|гп|сп)\.?\s*([а-яa-z0-9\-]+)',
         r'\b(?:г|п|с|д|х|ст)\.[\s]*([а-яa-z0-9\-]+)',
         r'\b(?:г|п|с|х|ст)\s+([а-яa-z0-9\-]+)',
-        r'\b([а-яa-z0-9\-]+)\s+(?:г|п|с|д|пгт|рп)\b'
+        r'\b([а-яa-z0-9\-]+)\s+(?:г|п|с|д|пгт|рп|гп|сп)\b'
     ]:
         for m in re.finditer(pat, addr_clean):
             w = m.group(1).strip()
@@ -333,18 +398,17 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     # Detect city from comma-separated parts if not found
     for part in parts:
         words = re.findall(r'[а-яa-z0-9]+', part)
-        if any(w in {'г', 'город', 'пгт', 'рп', 'п', 'поселок'} for w in words):
+        if any(w in {'г', 'город', 'пгт', 'рп', 'гп', 'сп', 'п', 'поселок'} for w in words):
             c_words = [w for w in words if w not in ADDRESS_STOP_WORDS and not w.isdigit()]
             if c_words:
                 settlement_words.update(c_words)
                 if not city:
                     city = ' '.join(c_words)
 
-    # Extract clean street tokens using explicit street patterns
+    # Extract clean street tokens using explicit street patterns on text without km
     street_words = []
     for pat in STREET_PATTERNS:
-        m = re.search(pat, addr_clean)
-        if m:
+        for m in re.finditer(pat, addr_clean_no_km):
             cand = m.group(1).strip()
             cand = re.sub(r'^\d+\s*|\s*\d+$', '', cand).strip()
             words = [
@@ -354,10 +418,12 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
             if words:
                 street_words = words
                 break
+        if street_words:
+            break
 
     # Fallback if street pattern didn't match: take words that are not region/city/settlement/stop words
     if not street_words:
-        all_words = re.findall(r'[а-яa-z0-9]+', addr_clean)
+        all_words = re.findall(r'[а-яa-z0-9]+', addr_clean_no_km)
         for w in all_words:
             if len(w) >= 3 and w not in ADDRESS_STOP_WORDS and w not in settlement_words and not any(c.isdigit() for c in w):
                 if not city or w not in city.split():
@@ -373,6 +439,7 @@ def get_address_blocking_keys(
     city: Optional[str] = None,
     street_tokens: Optional[List[str]] = None,
     store_code: Optional[str] = None,
+    km: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """
     Generates multi-pass blocking keys for candidate retrieval.
@@ -384,6 +451,9 @@ def get_address_blocking_keys(
         base_house = base_house if base_house is not None else b_h
         city = city if city is not None else c
         street_tokens = street_tokens if street_tokens is not None else s_tokens
+
+    if km is None and raw_addr:
+        km = extract_km(raw_addr) or extract_km(store_name)
 
     if not base_house:
         base_house = "б/н"
@@ -402,11 +472,28 @@ def get_address_blocking_keys(
             keys.append((f"{st}_code_{store_code}", "code"))
 
     # Street and city keys with house number
+    stemmed_tokens = [stem_street_token(st) for st in street_tokens]
+
     if city_token:
         for st in street_tokens[:3]:
             keys.append((f"{city_token}_{st}", base_house))
+        for stem in stemmed_tokens[:3]:
+            if stem:
+                keys.append((f"{city_token}_{stem}", base_house))
 
     for st in street_tokens[:3]:
         keys.append((st, base_house))
 
+    for stem in stemmed_tokens[:3]:
+        if stem and stem not in street_tokens:
+            keys.append((stem, base_house))
+
+    # KM-based blocking keys
+    if km:
+        keys.append((f"km_{km}", base_house))
+        for stem in stemmed_tokens[:2]:
+            if stem:
+                keys.append((f"{stem}_km{km}", "km"))
+
     return keys
+

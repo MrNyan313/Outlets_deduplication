@@ -19,13 +19,13 @@ COL_INDICES = {
 }
 
 
-def make_row(id_val, name, addr, is_vendor, dist="Сладкая жизнь плюс ООО", subnetwork="Ru_Test"):
+def make_row(id_val, name, addr, is_vendor, dist="Сладкая жизнь плюс ООО", subnetwork="Ru_Test", street=None):
     return (
         str(id_val),
         name,
         "ООО Тест",
         addr,
-        "Россия, " + addr,
+        street if street is not None else ("Россия, " + addr),
         str(is_vendor),
         subnetwork,
         "MD",
@@ -1026,6 +1026,69 @@ def test_detskiy_mir_format_separation():
     assert len(set(group_ids)) == 6
     for r in results:
         assert r[1] == STATUS_UNIQUE
+
+
+def test_highway_km_deduplication_pyatnitskoe():
+    """
+    Outlets on a major highway recorded with variations (highway+km+house, km+house,
+    trailing comma without house number, genitive vs nominative street forms,
+    and border cities Moscow vs Krasnogorsk) must all merge into a single group.
+    """
+    dist = "ОКЕЙ ООО (take off)"
+    r1 = make_row(1, "ГМ Москва Пятницкое", "Московская обл, Красногорск г, 7-й (автодорога Пятницкое шоссе тер.) км, 2", 0, dist=dist, subnetwork="Ru_О'Кей", street=" влд 2")
+    r2 = make_row(2, "ГМ Москва Пятницкое", "Московская обл, Красногорск г, 7-й (автодорога Пятницкое шоссе тер.) км, 2", 0, dist=dist, subnetwork="Ru_О'Кей", street=" ")
+    r3 = make_row(3, "ГМ Москва Пятницкое", "Московская обл, Красногорск г, 7-й км, 2", 0, dist=dist, subnetwork="Ru_О'Кей", street="Россия, Московская обл, Красногорск г, автодорога Пятницкое шоссе, 7-й км д 2")
+    r4 = make_row(4, "ГМ Москва Пятницкое", "Москва г, Пятницкое ш, 7-й км, 2", 0, dist=dist, subnetwork="Ru_О'Кей", street=" ")
+    r5 = make_row(5, "ГМ Москва Пятницкое", "Москва г, Пятницкое ш, 7-й км,", 0, dist=dist, subnetwork="Ru_О'Кей", street=" ")
+    r6 = make_row(6, "ГМ Москва Пятницкое 7 км", "Московская область.,г.Москва,7 км Пятницкого ш., вл. 2", 0, dist=dist, subnetwork="Ru_О'Кей", street="Россия, Московская обл, Красногорск г, Отрадное п, Пятницкое ш ")
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+        OutletRecord(2, r3, COL_INDICES),
+        OutletRecord(3, r4, COL_INDICES),
+        OutletRecord(4, r5, COL_INDICES),
+        OutletRecord(5, r6, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run(include_similarity=True)
+
+    # All 6 records must merge into ONE single group!
+    group_ids = [r[0] for r in results]
+    assert len(set(group_ids)) == 1
+    # First record is group anchor (IDENTICAL), other matched records are IDENTICAL
+    for r in results:
+        assert r[1] == STATUS_IDENTICAL
+
+
+def test_border_agglomeration_deduplication_tallinskoe():
+    """
+    Outlets on Tallinskoye Highway 27 recorded under Saint Petersburg vs Leningrad Oblast (Villozi / Lomonosovsky)
+    must merge into one group with STATUS_IDENTICAL.
+    """
+    dist = "ОКЕЙ ООО (take off)"
+    r1 = make_row(10, "ГМ СПб Таллинское", "Ленинградская обл, Ломоносовский р-н, Таллинское ш, 27", 0, dist=dist, subnetwork="Ru_О'Кей", street="Россия, Ленинградская обл, Ломоносовский р-н, Виллози гп, Дом 27 ")
+    r2 = make_row(20, "ГМ СПб Таллинское", "Ленинградская обл, Ломоносовский р-н, Виллози гп, Таллинское ш, 27", 0, dist=dist, subnetwork="Ru_О'Кей", street="Россия, Ленинградская обл, Ломоносовский р-н, Таллинское ш д 27")
+    r3 = make_row(30, "ГМ СПб Таллинское", "Ленинградская обл, Ломоносовский р-н, Виллози д, Таллинское ш, 27", 0, dist=dist, subnetwork="Ru_О'Кей", street="Россия, Ленинградская обл, Ломоносовский р-н, Виллози гп, Дом 27 ")
+    r4 = make_row(40, "ГМ СПб Таллинское", "Санкт-Петербург г, Таллинское ш, 27", 0, dist=dist, subnetwork="Ru_О'Кей", street="Россия, Санкт-Петербург г, Старо-Паново, Таллинское ш д 27")
+    r5 = make_row(50, "ГМ СПб Таллинское", "Ленинградская обл, Ломоносовский р-н, Таллинское ш, 27", 0, dist=dist, subnetwork="Ru_О'Кей", street="Россия, Ленинградская обл, Ломоносовский р-н, Таллинское ш д 27")
+
+    records = [
+        OutletRecord(0, r1, COL_INDICES),
+        OutletRecord(1, r2, COL_INDICES),
+        OutletRecord(2, r3, COL_INDICES),
+        OutletRecord(3, r4, COL_INDICES),
+        OutletRecord(4, r5, COL_INDICES),
+    ]
+    dedup = OutletsDeduplicator(records)
+    results = dedup.run(include_similarity=True)
+
+    # All 5 records must merge into ONE single group!
+    group_ids = [r[0] for r in results]
+    assert len(set(group_ids)) == 1
+    for r in results:
+        assert r[1] == STATUS_IDENTICAL
+
 
 
 

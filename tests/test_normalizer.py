@@ -95,4 +95,40 @@ def test_extract_detskiy_mir_format():
     assert extract_detskiy_mir_format("Магазин Продукты") == ""
 
 
+def test_km_extraction_and_stemming():
+    from normalizer import extract_km, stem_street_token
+    assert extract_km("Москва г, Пятницкое ш, 7-й км, 2") == "7"
+    assert extract_km("Московская обл, Красногорск г, 7-й (автодорога Пятницкое шоссе тер.) км, 2") == "7"
+    assert extract_km("Самарская область,гСамара,24 км Московского шоссе, 5") == "24"
+    assert extract_km("Московское ш., 18 км") == "18"
+    assert extract_km("км 12") == "12"
+    assert extract_km("г. Самара, ул. Ленина, д. 5") == ""
+
+    assert stem_street_token("пятницкое") == "пятницк"
+    assert stem_street_token("пятницкого") == "пятницк"
+    assert stem_street_token("таллинское") == "таллин"
+    assert stem_street_token("таллинского") == "таллин"
+    assert stem_street_token("московское") == "москов"
+    assert stem_street_token("московского") == "москов"
+
+
+def test_highway_house_and_name_cleaning():
+    from normalizer import extract_house_components, clean_store_name, extract_address_details
+    # 7-й км with trailing comma must not extract 7 as house number
+    assert extract_house_components("Москва г, Пятницкое ш, 7-й км,")[0] == "б/н"
+    assert extract_house_components("Москва г, Пятницкое ш, 7-й км, 2")[0] == "2"
+    assert extract_house_components("Московская область.,г.Москва,7 км Пятницкого ш., вл. 2")[0] == "2"
+    assert extract_house_components("Московская обл, Красногорск г, 7-й (автодорога Пятницкое шоссе тер.) км, 2")[0] == "2"
+
+    # clean_store_name strips km
+    assert clean_store_name("ГМ Москва Пятницкое 7 км") == "гм москва пятницкое"
+    assert clean_store_name("ГМ Москва Пятницкое") == "гм москва пятницкое"
+
+    # extract_address_details extracts clean street and doesn't get polluted by тер
+    _, _, _, streets = extract_address_details("Московская обл, Красногорск г, 7-й (автодорога Пятницкое шоссе тер.) км, 2")
+    assert "пятницкое" in streets
+    assert "тер" not in streets
+
+
+
 
