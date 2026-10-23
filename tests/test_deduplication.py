@@ -56,7 +56,7 @@ def test_different_house_numbers_never_merge():
 def test_matching_by_store_code_identical():
     """Outlets matching by internal store code at the same address get STATUS_IDENTICAL."""
     # Master point
-    r_master = make_row(100, "X5 H085", "Пермский край, г. Кудымкар, ул. 50 лет Октября, 21", 1, "Сплат?Глобал")
+    r_master = make_row(100, "X5 H085", "Пермский край, г. Кудымкар, ул. 50 лет Октября, 21", 1, "ПЯТЁРОЧКА")
     # Distributor point
     r_distrib = make_row(200, "Дискаунтер_H085", "Пермский край, Кудымкар, 50 лет Октября ул 21", 0, "ПЯТЁРОЧКА")
 
@@ -196,7 +196,7 @@ def test_missing_house_and_alphanumeric_store_codes():
     Outlets with missing house numbers ('б/н', 'n/a' or omitted) and alphanumeric store codes
     (like '304S') from national networks must merge with status STATUS_IDENTICAL.
     """
-    r_master = make_row(10, "Пятерочка 304S", "Ставропольский край, Ессентуки, Октябрьская улица, б\\н", 1, "Сплат?Глобал")
+    r_master = make_row(10, "Пятерочка 304S", "Ставропольский край, Ессентуки, Октябрьская улица, б\\н", 1, "ПЯТЁРОЧКА")
     r_d1 = make_row(20, "Дискаунтер_304S", "Ставропольский край г.Ессентуки, Октябрьская ул", 0, "ПЯТЁРОЧКА")
     r_d2 = make_row(30, "Дискаунтер_304S", "Ставропольский край, Ессентуки, Октябрьская улица, n\\a", 0, "ПЯТЁРОЧКА")
 
@@ -290,7 +290,7 @@ def test_ssiv_stores_match_with_master_coverage_points():
     )
     r_mast_5268 = make_row(
         476912, "5268", "Москва г, Академика Волгина ул, 15, к 3", 1,
-        dist="Сплат?Глобал"
+        dist="СОЮЗ СВ. ИОАННА ВОИНА ООО (take-off) с 01.04.2018"
     )
     r_dist_5282 = make_row(
         1327, "5282", "5282 ССИВ Москва г, аллея Долгопрудная, д.15, к. 4", 0,
@@ -298,7 +298,7 @@ def test_ssiv_stores_match_with_master_coverage_points():
     )
     r_mast_5282 = make_row(
         476963, "5282", "Москва г, Долгопрудная аллея, 15, к 4", 1,
-        dist="Сплат?Глобал"
+        dist="СОЮЗ СВ. ИОАННА ВОИНА ООО (take-off) с 01.04.2018"
     )
 
     records = [
@@ -1088,6 +1088,88 @@ def test_border_agglomeration_deduplication_tallinskoe():
     assert len(set(group_ids)) == 1
     for r in results:
         assert r[1] == STATUS_IDENTICAL
+
+
+def test_national_network_coverage_scoping_semicolon_distributors():
+    """
+    Coverage points (IsVendor == 1) specify semicolon-separated distributor names
+    in 'Дистрибьютор'. National retail networks (NATIONAL_NETWORKS) are strictly scoped:
+    - Coverage point ONLY matches national distributors that are listed in its distributor column.
+    - National distributors NOT listed in the semicolon string are strictly rejected (score 0.0).
+    - Regular non-national distributors are NOT subject to this restriction and can match.
+    """
+    from deduplicator import calculate_outlet_match_score
+
+    # 1. Master point with 2 national distributors allowed
+    r_master = make_row(
+        100, "Ашан 045", "Москва г, ул. Вавилова, 3", 1,
+        dist="АШАН ООО (take-off) с 01.04.2018; ОКЕЙ ООО (take off)"
+    )
+    rec_master = OutletRecord(0, r_master, COL_INDICES)
+    assert rec_master.allowed_distributors == {
+        "АШАН ООО (take-off) с 01.04.2018",
+        "ОКЕЙ ООО (take off)",
+    }
+
+    # 1a. Matching national distributor (АШАН)
+    r_ashan = make_row(201, "АШАН 045", "Москва г, ул. Вавилова, 3", 0, dist="АШАН ООО (take-off) с 01.04.2018")
+    rec_ashan = OutletRecord(1, r_ashan, COL_INDICES)
+    score_ashan, exact_ashan = calculate_outlet_match_score(rec_master, rec_ashan)
+    assert exact_ashan is True
+    assert score_ashan >= 95.0
+
+    # 1b. Matching national distributor (О'КЕЙ)
+    r_okey = make_row(202, "ГМ ОКЕЙ Вавилова", "Москва г, ул. Вавилова, 3", 0, dist="ОКЕЙ ООО (take off)", subnetwork="Ru_О'Кей")
+    rec_okey = OutletRecord(2, r_okey, COL_INDICES)
+    score_okey, _ = calculate_outlet_match_score(rec_master, rec_okey)
+    assert score_okey > 0.0
+
+    # 1c. Non-allowed national distributor (ПЯТЁРОЧКА) with identical store code & address -> STRICT REJECT
+    r_pyat = make_row(203, "Пятерочка 045", "Москва г, ул. Вавилова, 3", 0, dist="ПЯТЁРОЧКА")
+    rec_pyat = OutletRecord(3, r_pyat, COL_INDICES)
+    score_pyat, exact_pyat = calculate_outlet_match_score(rec_master, rec_pyat)
+    assert exact_pyat is False
+    assert score_pyat == 0.0
+
+    # 1d. Non-allowed national distributor (ТАНДЕР / Магнит) with identical address -> STRICT REJECT
+    r_magnit = make_row(204, "Магнит", "Москва г, ул. Вавилова, 3", 0, dist="ТАНДЕР АО (take-off) с 01.04.2018", subnetwork="Ru_Магнит")
+    rec_magnit = OutletRecord(4, r_magnit, COL_INDICES)
+    score_magnit, exact_magnit = calculate_outlet_match_score(rec_master, rec_magnit)
+    assert exact_magnit is False
+    assert score_magnit == 0.0
+
+    # 2. Master point with regular distributor (Сплат?Глобал)
+    r_master_splat = make_row(300, "Магазин Продукты", "Москва г, ул. Ленина, 10", 1, dist="Сплат?Глобал")
+    rec_master_splat = OutletRecord(5, r_master_splat, COL_INDICES)
+
+    # 2a. National distributor (ПЯТЁРОЧКА) -> strictly rejected
+    r_pyat_splat = make_row(301, "Магазин Продукты", "Москва г, ул. Ленина, 10", 0, dist="ПЯТЁРОЧКА")
+    rec_pyat_splat = OutletRecord(6, r_pyat_splat, COL_INDICES)
+    score_splat_pyat, _ = calculate_outlet_match_score(rec_master_splat, rec_pyat_splat)
+    assert score_splat_pyat == 0.0
+
+    # 2b. Regular distributor (Сладкая жизнь плюс ООО) -> allowed to match
+    r_reg = make_row(302, "Магазин Продукты", "Москва г, ул. Ленина, 10", 0, dist="Сладкая жизнь плюс ООО")
+    rec_reg = OutletRecord(7, r_reg, COL_INDICES)
+    score_reg, exact_reg = calculate_outlet_match_score(rec_master_splat, rec_reg)
+    assert exact_reg is True
+    assert score_reg >= 95.0
+
+    # 3. Full end-to-end deduplication pipeline check
+    dedup = OutletsDeduplicator([rec_master, rec_ashan, rec_pyat, rec_magnit])
+    results = dedup.run(include_similarity=True)
+    res_by_id = {r[2][0]: r for r in results}
+
+    # rec_master (100) and rec_ashan (201) are merged into one group
+    assert res_by_id["100"][0] == res_by_id["201"][0]
+    assert res_by_id["201"][1] == STATUS_IDENTICAL
+
+    # rec_pyat (203) and rec_magnit (204) are unique groups, NOT merged with rec_master
+    assert res_by_id["203"][0] != res_by_id["100"][0]
+    assert res_by_id["203"][1] == STATUS_UNIQUE
+    assert res_by_id["204"][0] != res_by_id["100"][0]
+    assert res_by_id["204"][1] == STATUS_UNIQUE
+
 
 
 

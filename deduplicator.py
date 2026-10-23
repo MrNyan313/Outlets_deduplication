@@ -108,6 +108,7 @@ class OutletRecord:
         'is_globus_short',
         'dm_format',
         'km',
+        'allowed_distributors',
     )
 
     def __init__(self, index: int, raw_row: tuple, col_indices: Dict[str, int]):
@@ -123,6 +124,7 @@ class OutletRecord:
 
         self.distributor = str(raw_row[col_indices['Дистрибьютор']]).strip()
         self.is_national = self.distributor in NATIONAL_NETWORKS
+        self.allowed_distributors = {d.strip() for d in self.distributor.split(';') if d.strip()}
 
         if 'Подсеть' in col_indices:
             sub_val = raw_row[col_indices['Подсеть']]
@@ -229,36 +231,41 @@ class OutletRecord:
         elif self.is_vendor:
             # Master coverage points can match code-based networks, code+subnetwork networks, strict subnetwork networks, globus, or regular distributors
             keys = []
-            if self.subnetwork == "Ru_Globus" or "глобус" in self.name.lower():
-                code = get_globus_location_code(self.name, self.address, street_col_val)
-                if code:
-                    keys.append((f"globus_{code}", "globus_code"))
-            if self.subnetwork == "Ru_Детский мир" or "детский мир" in self.name.lower():
-                fmt = extract_detskiy_mir_format(self.name) or "ДМ"
-                for k, v in get_address_blocking_keys(
-                    raw_addr=self.address,
-                    store_name=self.name,
-                    base_house=self.base_house,
-                    city=self.city,
-                    street_tokens=self.street_tokens,
-                    store_code=self.store_code,
-                    km=self.km,
-                ):
-                    keys.append((f"dm_{fmt}_{k}", v))
+            if GLOBUS_DISTRIBUTOR in self.allowed_distributors:
+                if self.subnetwork == "Ru_Globus" or "глобус" in self.name.lower():
+                    code = get_globus_location_code(self.name, self.address, street_col_val)
+                    if code:
+                        keys.append((f"globus_{code}", "globus_code"))
+            if DETSKIY_MIR_DISTRIBUTOR in self.allowed_distributors:
+                if self.subnetwork == "Ru_Детский мир" or "детский мир" in self.name.lower():
+                    fmt = extract_detskiy_mir_format(self.name) or "ДМ"
+                    for k, v in get_address_blocking_keys(
+                        raw_addr=self.address,
+                        store_name=self.name,
+                        base_house=self.base_house,
+                        city=self.city,
+                        street_tokens=self.street_tokens,
+                        store_code=self.store_code,
+                        km=self.km,
+                    ):
+                        keys.append((f"dm_{fmt}_{k}", v))
             if self.store_code:
                 for net in CODE_BASED_NETWORKS:
-                    c = self.store_code
-                    if net in PAD_3DIGIT_CODE_NETWORKS and c.isdigit() and len(c) in (1, 2):
-                        c = c.zfill(3)
-                    keys.append((f"code_{net}_{c}", "code"))
+                    if net in self.allowed_distributors:
+                        c = self.store_code
+                        if net in PAD_3DIGIT_CODE_NETWORKS and c.isdigit() and len(c) in (1, 2):
+                            c = c.zfill(3)
+                        keys.append((f"code_{net}_{c}", "code"))
             clean_sub = normalize_text(self.subnetwork)
             if self.store_code and clean_sub:
                 for dist in CODE_AND_SUBNETWORK_DISTRIBUTORS:
-                    keys.append((f"code_sub_{dist}_{self.store_code}_{clean_sub}", "code_sub"))
+                    if dist in self.allowed_distributors:
+                        keys.append((f"code_sub_{dist}_{self.store_code}_{clean_sub}", "code_sub"))
             clean_n = normalize_text(self.name)
             if clean_n and clean_sub:
                 for dist in STRICT_SUBNETWORK_DISTRIBUTORS:
-                    keys.append((f"strict_sub_{dist}_{clean_n}_{clean_sub}", "strict_sub"))
+                    if dist in self.allowed_distributors:
+                        keys.append((f"strict_sub_{dist}_{clean_n}_{clean_sub}", "strict_sub"))
             keys.extend(get_address_blocking_keys(
                 raw_addr=self.address,
                 store_name=self.name,
@@ -270,7 +277,8 @@ class OutletRecord:
             ))
             if len(self.clean_name.split()) >= 2:
                 for dist in NATIONAL_NETWORKS:
-                    keys.append((f"name_{dist}_{self.clean_name}", "name"))
+                    if dist in self.allowed_distributors:
+                        keys.append((f"name_{dist}_{self.clean_name}", "name"))
             self.blocking_keys = keys
         else:
             # Regular distributor outlets
@@ -296,6 +304,15 @@ def calculate_outlet_match_score(
     Calculates similarity between two outlets.
     Returns: (score, is_exact_match)
     """
+    # 00. NATIONAL NETWORKS COVERAGE SCOPING RULE:
+    # If one outlet is a national network and the other is a coverage point (IsVendor == 1):
+    # The coverage point MUST explicitly contain this national distributor in its semicolon-separated distributor list!
+    if outlet1.is_vendor != outlet2.is_vendor:
+        vendor_pt = outlet1 if outlet1.is_vendor else outlet2
+        distrib_pt = outlet2 if outlet1.is_vendor else outlet1
+        if distrib_pt.distributor in NATIONAL_NETWORKS:
+            if distrib_pt.distributor not in vendor_pt.allowed_distributors:
+                return 0.0, False
     # 0a. GLOBUS HYPERMARKET RULE
     if (
         outlet1.distributor == GLOBUS_DISTRIBUTOR
