@@ -3,24 +3,32 @@
 import re
 from typing import Tuple, List, Set, Optional
 
-from config import PAD_3DIGIT_CODE_NETWORKS
+from config import PAD_3DIGIT_CODE_NETWORKS, ALPHA_CODE_NETWORKS
 
-# Organizational legal forms and generic chain words to remove from store names
+# Organizational legal forms and generic chain/payment noise words to remove from store names
 LEGAL_FORMS = {
     'ооо', 'ип', 'зао', 'оао', 'ао', 'пао', 'тд', 'тк', 'маг', 'магазин',
     'см', 'с/м', 'супермаркет', 'гипермаркет', 'дискаунтер', 'универсам',
-    'гастроном', 'бузоо', 'црб', 'чп', 'лтд', 'ltd', 'ссив', 'тт'
+    'гастроном', 'бузоо', 'црб', 'чп', 'лтд', 'ltd', 'ссив', 'тт',
+    'флп', 'фл', 'спд', 'ртт', 'нал', 'безнал', 'упд', 'эдо', 'зк',
+    'закрытые', 'закрыт', 'закрыта', 'долг', 'предоплата',
 }
 
-# Regional adjectives and words that must NOT be treated as street names
-REGION_WORDS = {
+# Regional adjectives and republic names that must NOT be treated as street names in fallback parsing
+REGION_ADJECTIVES = {
     'московская', 'ленинградская', 'нижегородская', 'самарская', 'владимирская',
     'свердловская', 'ростовская', 'челябинская', 'воронежская', 'волгоградская',
     'краснодарский', 'ставропольский', 'пермский', 'алтайский', 'приморский',
     'башкортостан', 'татарстан', 'дагестан', 'удмуртская', 'чувашская',
-    'область', 'обл', 'край', 'респ', 'республика', 'ао', 'район', 'рн',
-    'р-н', 'россия', 'рф', 'федерация'
+    'кабардино', 'балкарская', 'кбр', 'днр', 'лнр', 'рмэ', 'марий',
+    'чувашия', 'удмуртия', 'мордовия', 'бурятия', 'карелия', 'хакасия',
+    'ингушетия', 'калмыкия', 'чечня', 'якутия', 'тыва', 'адыгея',
 }
+REGION_ADMIN_UNITS = {
+    'область', 'обл', 'край', 'респ', 'республика', 'ао', 'район', 'рн',
+    'р-н', 'округ', 'россия', 'рф', 'федерация',
+}
+REGION_WORDS = REGION_ADJECTIVES | REGION_ADMIN_UNITS
 
 # Stop words in address parsing
 ADDRESS_STOP_WORDS = REGION_WORDS | {
@@ -149,22 +157,25 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     pat_km = r'(?:^|[,\s(])\d+[- ]*(?:й|ой|ий|ый|ая)?\s*(?:\([^)]*\)\s*)?(?:км|километр)\b|\b(?:км|километр)\.?\s*\d+\b'
     t = re.sub(pat_km, ' ', t, flags=re.IGNORECASE)
 
-    # Cut off interior unit info (apartment, office, room)
-    t = re.split(r'\b(?:кв|квартира|пом|помещение|комн|оф|офис|эт|этаж)\b', t)[0].strip()
+    # Cut off interior unit info (apartment, office, room, market stall/booth)
+    t = re.split(
+        r'\b(?:кв|квартира|пом|помещение|комн|оф|офис|эт|этаж|место|контейнер|бутик|павильон|секция)\b',
+        t
+    )[0].strip()
 
-    # 1. House with korpus/building/stroenie: e.g. "15, к 3", "д.15,к.3", "15 стр 3", "д. 15 корп 2", "зд. 7 к. 4"
+    # 1. House with korpus/building/stroenie: e.g. "15, к 3", "д.15,к.3", "15 стр 3", "дом 2 стр Б", "д. 15 корп 2"
     m1 = re.search(
         r'(?:(?:дом|д|зд|здание)\.?\s*(?:№\s*)?)?'
-        r'(\d+)\s*([а-яa-z])?(?:\s*[/\\-]\s*(\d+[а-яa-z]?))?'
+        r'(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]))?(?:\s*[/\\-]\s*(\d+(?:[а-яa-z](?![а-яa-z]))?))?'
         r'(?:[,\s/\\-]+|(?<=\d))'
-        r'(?:к|корп|корпус|стр|строение|п|лит|литера)\.?\s*(\d+[а-яa-z]?)',
+        r'(?:(?:к|корп|корпус|стр|строение|лит|литера)\.?\s*(\d+(?:[а-яa-z](?![а-яa-z]))?|[а-яa-z](?![а-яa-z]))|п\.?\s*(\d+(?:[а-яa-z](?![а-яa-z]))?))',
         t
     )
     if m1:
         base_num = m1.group(1)
         lit = m1.group(2) or ''
         slash = m1.group(3) or ''
-        korp = m1.group(4) or ''
+        korp = m1.group(4) or m1.group(5) or ''
         full = base_num + lit
         if slash:
             full += '/' + slash
@@ -175,7 +186,7 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     # 2. Explicit marker: дом, д., зд., здание, вл, влд, владение, уч, участок
     m2 = re.search(
         r'\b(?:дом|д|зд|здание|вл|влд|владение|уч|участок)\.?\s*(?:№\s*)?'
-        r'(\d+)\s*([а-яa-z])?(?:\s*[/\\-]\s*(\d+[а-яa-z]?))?',
+        r'(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]))?(?:\s*[/\\-]\s*(\d+(?:[а-яa-z](?![а-яa-z]))?))?',
         t
     )
     if m2:
@@ -188,7 +199,10 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
         return base_num, full
 
     # 3. корпус / строение directly followed by number (standalone, e.g. "стр 15", "к514")
-    m3 = re.search(r'\b(?:корпус\s*строение|строение|корпус|корп|стр|к)\.?\s*(?:№\s*)?(\d+)\s*([а-яa-z])?', t)
+    m3 = re.search(
+        r'\b(?:корпус\s*строение|строение|корпус|корп|стр|к)\.?\s*(?:№\s*)?(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]))?',
+        t
+    )
     if m3:
         base_num = m3.group(1)
         lit = m3.group(2) or ''
@@ -201,7 +215,10 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     # 4. Number at end of address string or after comma: e.g. "Татищева бульвар, 6а" or "ул 21"
     # Strip trailing punctuation before checking end of string
     t_no_date = t_no_date.rstrip(' ,.;')
-    m4 = re.search(r'[, ]+(\d+)\s*([а-яa-z])?(?:\s*[/\\-]\s*(\d+[а-яa-z]?))?\s*$', t_no_date)
+    m4 = re.search(
+        r'[, ]+(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]))?(?:\s*[/\\-]\s*(\d+(?:[а-яa-z](?![а-яa-z]))?))?\s*$',
+        t_no_date
+    )
     if m4:
         base_num = m4.group(1)
         lit = m4.group(2) or ''
@@ -211,10 +228,13 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
             full += '/' + slash
         return base_num, full
 
-    # 5. Standalone number that is not postal code
-    nums = re.findall(r'\b(\d+([а-яa-z])?)\b', t_no_date)
+    # 5. Standalone number (with optional slash fraction like 399/1) that is not postal code
+    nums = re.findall(
+        r'\b(\d+(?:[а-яa-z](?![а-яa-z]))?(?:\s*[/\\]\s*\d+(?:[а-яa-z](?![а-яa-z]))?)?)\b',
+        t_no_date
+    )
     if nums:
-        val = nums[-1][0]
+        val = re.sub(r'\s*[/\\]\s*', '/', nums[-1])
         base = re.match(r'\d+', val).group(0)
         return base, val
 
@@ -222,96 +242,125 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     return "б/н", "б/н"
 
 
-def extract_store_code(name: str, distributor: str = "") -> str:
+NON_ALPHA_CODE_NOISE = {
+    'ооо', 'рц', 'ао', 'зао', 'ип', 'фл', 'флп', 'спд', 'общий', 'бонус',
+    'опт', 'розница', 'склад', 'рынок', 'долг', 'нал', 'упд', 'ртт',
+    'магазин', 'сельмаг', 'колосок', 'продукты', 'аптека', 'весна',
+    'универсам', 'гастроном', 'палатка', 'киоск', 'ларек',
+}
+GENERIC_STORE_PREFIXES = {
+    'дискаунтер', 'гипермаркет', 'супермаркет', 'магазин', 'маг', 'тт',
+}
+
+
+def _format_store_code(raw_code: str, distributor: str = "") -> str:
+    """Normalizes extracted store code and applies 3-digit zero-padding where configured."""
+    code = raw_code.upper().translate(CYR_TO_LAT)
+    if distributor in PAD_3DIGIT_CODE_NETWORKS and code.isdigit() and len(code) in (1, 2):
+        code = code.zfill(3)
+    return code
+
+
+def extract_store_code(
+    name: str,
+    distributor: str = "",
+    allow_alpha_code: Optional[bool] = None,
+) -> str:
     """
     Extracts store code / number from a store name.
-    e.g. 'Дискаунтер_363H' -> '363H'
-         'Дискаунтер_5181' -> '5181'
-         '5268' -> '5268'
-         '5282' -> '5282'
-         'Дискаунтер_304S' -> '304S'
-         'Пятерочка 304S' -> '304S'
-         'X5 H085' -> 'H085'
-         'Малинка №604' -> '604'
-         'Спар № 118' -> '118'
-         'X5 2680' -> '2680'
-         'Атак 548' -> '548'
-         'Верный 2177' -> '2177'
-         '1' (АШАН) -> '001'
-         '36' (АШАН) -> '036'
-         'Ашан (036) KUNCEVO' -> '036'
-         'Лента 1' -> '001'
-         'ДИКСИ-77007' -> '77007'
-         'МЕТРО 52' -> '52'
+    Purely alphabetical codes (without digits) are restricted to ALPHA_CODE_NETWORKS.
     """
     if not name:
         return ""
     t = str(name).strip().replace("ё", "е").replace("Ё", "Е")
+    allow_alpha = (distributor in ALPHA_CODE_NETWORKS) if allow_alpha_code is None else allow_alpha_code
 
     # 1. Number marker: № 604, №604, N 604, #604
     m_no = re.search(r'(?:[№#]|\bN\.?)\s*(\d+[а-яa-z0-9]*)', t, re.IGNORECASE)
     if m_no:
-        code = m_no.group(1).upper().translate(CYR_TO_LAT)
-        if distributor in PAD_3DIGIT_CODE_NETWORKS and code.isdigit() and len(code) in (1, 2):
-            code = code.zfill(3)
-        return code
+        return _format_store_code(m_no.group(1), distributor)
 
     # 2. Parentheses code: e.g. '(001) MYTISHI', 'Ашан (036) KUNCEVO', '(023) ADYGEYA', '(719) REUTOV'
     m_paren = re.search(r'\(([0-9a-zA-Zа-яА-Я]+)\)', t)
     if m_paren:
-        code = m_paren.group(1).upper().translate(CYR_TO_LAT)
-        if distributor in PAD_3DIGIT_CODE_NETWORKS and code.isdigit() and len(code) in (1, 2):
-            code = code.zfill(3)
-        return code
+        raw_code = m_paren.group(1)
+        if any(c.isdigit() for c in raw_code) or (
+            allow_alpha and raw_code.lower() not in NON_ALPHA_CODE_NOISE
+        ):
+            return _format_store_code(raw_code, distributor)
 
-    # 3. Known chain prefixes followed by store code (alphanumeric):
+    # 3. Known chain prefixes followed by explicit separator or digits:
     # e.g. 'Дикси ДИКСИ-78510', 'ДИКСИ-47122', 'МЕТРО 52', 'Ашан 25', 'Лента 8', 'Лента611'
     m_pref = re.search(
-        r'\b(?:дискаунтер|гипермаркет|супермаркет|магазин|маг|тт|пятерочка|верный|атак(?:\s+ооо)?|чижик|даркстор|x5|х5|дикси|метро|metro|ашан|лента)[_ \-]*(?:дикси[_ \-]*)?([0-9a-zA-Zа-яА-Я]+)\b',
+        r'\b(дискаунтер|гипермаркет|супермаркет|магазин|маг|тт|пятерочка|верный|атак(?:\s+ооо)?|чижик|даркстор|x5|х5|дикси|метро|metro|ашан|лента)(?:[_ \-]+|(?=\d))(?:дикси[_ \-]+)?([0-9a-zA-Zа-яА-Я]+)\b',
         t, re.IGNORECASE
     )
     if m_pref:
-        code = m_pref.group(1).upper().translate(CYR_TO_LAT)
-        if not code.lower() in {'ооо', 'рц', 'ао', 'зао'}:
-            if distributor in PAD_3DIGIT_CODE_NETWORKS and code.isdigit() and len(code) in (1, 2):
-                code = code.zfill(3)
-            return code
+        prefix, raw_code = m_pref.group(1).lower(), m_pref.group(2)
+        if raw_code.lower() not in {'ооо', 'рц', 'ао', 'зао'}:
+            has_digit = any(c.isdigit() for c in raw_code)
+            if has_digit or (
+                allow_alpha
+                and prefix not in GENERIC_STORE_PREFIXES
+                and raw_code.lower() not in NON_ALPHA_CODE_NOISE
+            ):
+                return _format_store_code(raw_code, distributor)
 
-    # 4. Pure code: 1 to 7 alphanumeric characters (e.g. '1', '36', '5268', '548', '363H', 'HA3A', '204')
+    # 4. Pure code: 1 to 7 alphanumeric characters (e.g. '1', '36', '5268', '548', '363H', 'HA3A', '204', 'ЯРС')
     if re.match(r'^[0-9a-zA-Zа-яА-Я]{1,7}$', t):
-        code = t.upper().translate(CYR_TO_LAT)
-        if distributor in PAD_3DIGIT_CODE_NETWORKS and code.isdigit() and len(code) in (1, 2):
-            code = code.zfill(3)
-        return code
+        if any(c.isdigit() for c in t) or (allow_alpha and t.lower() not in NON_ALPHA_CODE_NOISE):
+            return _format_store_code(t, distributor)
 
-    # 5. Digits followed by chain name: e.g. '77531 Дикси'
+    # 5. Digits/code followed by chain name: e.g. '77531 Дикси'
     m_trail = re.search(r'^([0-9a-zA-Zа-яА-Я]+)\s+(?:дикси|метро|metro|ашан|лента)\b', t, re.IGNORECASE)
     if m_trail:
-        code = m_trail.group(1).upper().translate(CYR_TO_LAT)
-        if distributor in PAD_3DIGIT_CODE_NETWORKS and code.isdigit() and len(code) in (1, 2):
-            code = code.zfill(3)
-        return code
+        raw_code = m_trail.group(1)
+        if any(c.isdigit() for c in raw_code) or (allow_alpha and raw_code.lower() not in NON_ALPHA_CODE_NOISE):
+            return _format_store_code(raw_code, distributor)
 
     # 6. Alphanumeric store codes in mixed text: e.g. H085, 304S, 31Y6, E231
     m_code = re.search(r'(?:^|[^a-zA-Zа-яА-Я0-9])([a-zA-Zа-яА-Я0-9]{3,6})(?:$|[^a-zA-Zа-яА-Я0-9])', t)
     if m_code:
-        code = m_code.group(1).upper().translate(CYR_TO_LAT)
-        if any(c.isdigit() for c in code):
-            if distributor in PAD_3DIGIT_CODE_NETWORKS and code.isdigit() and len(code) in (1, 2):
-                code = code.zfill(3)
-            return code
+        raw_code = m_code.group(1)
+        if any(c.isdigit() for c in raw_code):
+            return _format_store_code(raw_code, distributor)
 
     return ""
 
 
-def clean_store_name(name: str) -> str:
+def _strip_leading_accounting_id(text: str) -> str:
+    """Removes leading distributor numeric accounting IDs (e.g. '3907.', '124395 '), keeping '1000 Мелочей'."""
+    stripped = re.sub(
+        r'^\s*(?:\d{4,7}\s*[.,_-]+\s*|\d{5,7}\s+(?=[а-яa-z])|\d{4}\s+(?!мелочей\b|год|лет)(?=[а-яa-z]))',
+        ' ',
+        text,
+    )
+    return stripped if re.search(r'[а-яa-z]', stripped) else text
+
+
+def clean_store_name(name: str, strip_leading_id: bool = False) -> str:
     """
-    Cleans a store name by removing legal forms (ООО, ИП), punctuation, initials,
-    and trailing/embedded kilometer markers so store names match across formats.
+    Cleans a store name by removing legal forms (ООО, ИП, ФЛП, Индивидуальный предприниматель),
+    payment/accounting noise tails, punctuation, initials, and km markers.
     """
     if not name:
         return ""
     t = str(name).lower().replace("ё", "е")
+    if strip_leading_id:
+        t = _strip_leading_accounting_id(t)
+    # Remove leading country prefix 'РФ ...'
+    t = re.sub(r'^\s*рф\b[\s,.-]*(?=[а-яa-z0-9])', ' ', t)
+    # Remove delivery/status annotations
+    t = re.sub(r'-?\s*адрес\s+доставки(?:_\d+)?', ' ', t)
+    t = re.sub(r'\(\s*(?:нет\s+договора|общий|бонус|зк|закрыт[оаы]?|нал|безнал|долг|упд)\s*\)', ' ', t)
+    t = re.sub(r'\bиндивидуальн(?:ый|ого)\s+предпринимател[ья]\b', ' ', t)
+    t = re.sub(r'\b\d+\s*%\s*п\s*[/\\.]?\s*о\b', ' ', t)
+    t = re.sub(r'\bп\s*[/\\.]\s*о\b', ' ', t)
+    t = re.sub(r'\b\d+\s*упд\s*\+\s*\d+\s*расх\b', ' ', t)
+    t = re.sub(r'\b\d+\s*(?:дн(?:ей|я)?|дн)\b(?:\s*\.\s*[а-я](?![а-я]))?', ' ', t)
+    t = re.sub(r'\b(?:нет\s+договора|чек\s+ккм|за\s+наличк[уа]|наличк[уа])\b', ' ', t)
+    t = re.sub(r'\b(?:эл\.?\s*накл\.?|(?:торг|т)[- ]?12)\b', ' ', t)
+    t = re.sub(r'\b(?:т|тел)\.?\s*[:\-]?\s*(?:\+7|8|7)?[\d\-]{7,12}\b', ' ', t)
     # Remove quotes, brackets, store symbols
     t = re.sub(r'["\'\(\)\[\]«»„“”№#_]', ' ', t)
     # Remove person initials like "в.в.", "е.а."
@@ -320,7 +369,76 @@ def clean_store_name(name: str) -> str:
     t = re.sub(r'\b\d+[- ]*(?:й|ой|ий|ый|ая)?\s*(?:км|километр)\b', ' ', t, flags=re.IGNORECASE)
     words = re.findall(r'[а-яa-z0-9]+', t)
     cleaned = [w for w in words if w not in LEGAL_FORMS]
+    # Remove format word 'розница' only if other meaningful tokens remain
+    if any(w != 'розница' for w in cleaned):
+        cleaned = [w for w in cleaned if w != 'розница']
     return ' '.join(cleaned)
+
+
+PATRONYMIC_ENDINGS = ('ович', 'евич', 'ич', 'овна', 'евна', 'ична', 'инична', 'оглы', 'кызы')
+NON_SURNAME_WORDS = LEGAL_FORMS | ADDRESS_STOP_WORDS | {
+    'индивидуальный', 'предприниматель', 'продукты', 'аптека', 'торг', 'рынок',
+    'павильон', 'место', 'контейнер', 'бутик', 'отдел', 'секция', 'ларек',
+    'киоск', 'хозяин', 'хозяюшка', 'галамарт', 'краснодар', 'москва', 'россия',
+    'украина', 'розница', 'опт', 'общий', 'бонус', 'договора', 'нет', 'бывш',
+}
+
+
+def normalize_surname(surname: str) -> str:
+    """Normalizes Russian feminine surname endings to masculine base for family matching."""
+    s = surname.lower().replace('ё', 'е')
+    for f_end, m_end in (
+        ('ова', 'ов'), ('ева', 'ев'), ('ина', 'ин'), ('ына', 'ын'),
+        ('ская', 'ский'), ('цкая', 'цкий'),
+    ):
+        if s.endswith(f_end) and len(s) > len(f_end) + 2:
+            return s[:-len(f_end)] + m_end
+    return s
+
+
+def normalize_patronymic(patronymic: str) -> str:
+    """Normalizes patronymic gender endings (e.g. 'арменовна' -> 'арменович', 'кызы' -> 'оглы')."""
+    p = patronymic.lower().replace('ё', 'е').strip()
+    for f_end, m_end in (
+        ('овна', 'ович'), ('евна', 'евич'), ('ична', 'ич'), ('инична', 'ич'),
+    ):
+        if p.endswith(f_end) and len(p) > len(f_end) + 2:
+            return p[:-len(f_end)] + m_end
+    if p.endswith(' кызы'):
+        return p[:-5] + ' оглы'
+    return p
+
+
+def extract_fio_surname_patronymic(name: str) -> Optional[Tuple[str, str]]:
+    """
+    Extracts normalized (surname, patronymic) from a full Cyrillic FIO in store name.
+    Returns None if the record does not contain a recognizable Surname + Name + Patronymic
+    or appears to be an LLC/corporate entity (ООО/ЗАО/ОАО/ПАО without ИП/ФЛП/СПД).
+    """
+    if not name:
+        return None
+    t = str(name).lower().replace('ё', 'е')
+    if re.search(r'\b(?:ооо|зао|оао|пао)\b', t) and not re.search(
+        r'\b(?:ип|индивидуальн(?:ый|ого)\s+предпринимател[ья]|флп|фл|спд)\b', t
+    ):
+        return None
+    t = _strip_leading_accounting_id(t)
+    t = re.sub(r'\bиндивидуальн(?:ый|ого)\s+предпринимател[ья]\b', ' ', t)
+    t = re.sub(r'\b\d+\s*(?:дн(?:ей|я)?|дн)\b', ' ', t)
+    words = [w for w in re.findall(r'[а-я]+', t) if len(w) >= 2 and w not in NON_SURNAME_WORDS]
+    if len(words) < 3:
+        return None
+    for idx in range(2, min(len(words), 6)):
+        w = words[idx]
+        if w in ('оглы', 'кызы') and idx >= 3:
+            surname, first_name, raw_pat = words[idx - 3], words[idx - 2], f"{words[idx - 1]} {w}"
+        elif w.endswith(PATRONYMIC_ENDINGS) and w not in ('оглы', 'кызы'):
+            surname, first_name, raw_pat = words[idx - 2], words[idx - 1], w
+        else:
+            continue
+        if len(surname) >= 3 and len(first_name) >= 2:
+            return normalize_surname(surname), normalize_patronymic(raw_pat)
+    return None
 
 
 def extract_detskiy_mir_format(name: str) -> str:
@@ -352,8 +470,9 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     t = re.sub(r'[\s,]*\([а-яa-z0-9\s\.\-]+\)\s*$', '', t).strip()
     base_house, full_house = extract_house_components(t)
 
-    # Clean address from postal code and unroll internal parentheses to clauses
+    # Clean address from postal code, municipal 'г.о.' prefix, and unroll internal parentheses
     addr_clean = re.sub(r'\b\d{6}\b', '', t)
+    addr_clean = re.sub(r'\bг\.?\s*о\.?(?=\s|[а-яa-z]|$)', ' ', addr_clean)
     addr_clean = addr_clean.replace('(', ' , ').replace(')', ' , ')
     # Mask km phrases before street extraction so km digits/units don't pollute street tokens
     pat_km = r'(?:^|[,\s(])\d+[- ]*(?:й|ой|ий|ый|ая)?\s*(?:\([^)]*\)\s*)?(?:км|километр)\b|\b(?:км|километр)\.?\s*\d+\b'
@@ -364,12 +483,20 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     city = ""
     settlement_words = set()
 
-    # Check major cities
-    for mc in MAJOR_CITIES:
-        if mc in t:
-            settlement_words.update(mc.split())
-            if not city:
-                city = mc
+    # Check major cities deterministically with word boundaries (supports glued 'гМосква')
+    city_matches = []
+    for mc in sorted(MAJOR_CITIES, key=len, reverse=True):
+        m_city = re.search(rf'(?:^|[^а-яa-z])(?:г\.?\s*)?({re.escape(mc)})(?=$|[^а-яa-z])', t)
+        if m_city:
+            prefix_ctx = t[max(0, m_city.start(1) - 12):m_city.start(1)]
+            if not re.search(rf'\b{STREET_TYPES}\.?\s*$', prefix_ctx):
+                city_matches.append((m_city.start(1), mc))
+    if city_matches:
+        city_matches.sort(key=lambda item: (item[0], -len(item[1])))
+        best_city = city_matches[0][1]
+        settlement_words.update(best_city.split())
+        if not city:
+            city = best_city
 
     # Check settlement indicators
     for pat in [
@@ -380,7 +507,7 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     ]:
         for m in re.finditer(pat, addr_clean):
             w = m.group(1).strip()
-            if w not in {'ул', 'улица', 'дом', 'стр', 'корп', 'кв', 'пом', 'обл', 'область', 'край', 'район', 'рн', 'р-н'}:
+            if len(w) >= 2 and w not in {'ул', 'улица', 'дом', 'стр', 'корп', 'кв', 'пом', 'обл', 'область', 'край', 'район', 'рн', 'р-н'}:
                 settlement_words.add(w)
                 if not city and w not in ADDRESS_STOP_WORDS and not w.isdigit():
                     city = w
@@ -392,36 +519,54 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     ]:
         for m in re.finditer(pat, addr_clean):
             w = m.group(1).strip()
-            if w not in {'ул', 'улица', 'дом', 'стр', 'корп', 'кв', 'пом'}:
+            if len(w) >= 2 and w not in {'ул', 'улица', 'дом', 'стр', 'корп', 'кв', 'пом'}:
                 settlement_words.add(w)
 
-    # Detect city from comma-separated parts if not found
+    # Detect city from comma-separated parts if not found (skip street/house-bearing or comma-less whole strings)
     for part in parts:
+        if re.search(rf'\b(?:{STREET_TYPES}|дом|д|зд|здание|стр|корп|кв|рынок)\b', part):
+            continue
         words = re.findall(r'[а-яa-z0-9]+', part)
+        if len(parts) == 1 and len(words) > 4:
+            continue
         if any(w in {'г', 'город', 'пгт', 'рп', 'гп', 'сп', 'п', 'поселок'} for w in words):
-            c_words = [w for w in words if w not in ADDRESS_STOP_WORDS and not w.isdigit()]
+            c_words = [w for w in words if len(w) >= 2 and w not in ADDRESS_STOP_WORDS and not w.isdigit()]
             if c_words:
                 settlement_words.update(c_words)
                 if not city:
                     city = ' '.join(c_words)
 
     # Extract clean street tokens using explicit street patterns on text without km
+    # Inside explicit street patterns (e.g. 'ул. Московская'), region adjectives are valid street names
+    explicit_street_stop_words = ADDRESS_STOP_WORDS - REGION_ADJECTIVES
     street_words = []
     for pat in STREET_PATTERNS:
         for m in re.finditer(pat, addr_clean_no_km):
             cand = m.group(1).strip()
+            cand = re.split(
+                r'(?<=[а-яa-z])\s+\d+(?!-[а-яa-z])\b|\s+\b(?:дом|д|зд|стр|корп|к|пом|оф|кв|рынок|кафе|павильон|место|бутик|контейнер|тц|трц|тк)\b',
+                cand,
+            )[0]
             cand = re.sub(r'^\d+\s*|\s*\d+$', '', cand).strip()
+            cand_tokens = re.findall(r'[а-яa-z0-9]+', cand)
             words = [
-                w for w in re.findall(r'[а-яa-z0-9]+', cand)
-                if len(w) >= 3 and w not in ADDRESS_STOP_WORDS and w not in settlement_words and not any(c.isdigit() for c in w)
+                w for w in cand_tokens
+                if len(w) >= 3 and w not in explicit_street_stop_words and w not in settlement_words and not any(c.isdigit() for c in w)
             ]
+            if not words:
+                # Preserve street names matching an oblast adjective (e.g. 'Московская обл, Подольск, ул. Московская')
+                city_tokens = set(city.split()) if city else set()
+                words = [
+                    w for w in cand_tokens
+                    if len(w) >= 3 and w not in explicit_street_stop_words and w not in city_tokens and not any(c.isdigit() for c in w)
+                ]
             if words:
                 street_words = words
                 break
         if street_words:
             break
 
-    # Fallback if street pattern didn't match: take words that are not region/city/settlement/stop words
+    # Fallback if street pattern didn't match: exclude all region/city/settlement/stop words
     if not street_words:
         all_words = re.findall(r'[а-яa-z0-9]+', addr_clean_no_km)
         for w in all_words:

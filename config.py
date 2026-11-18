@@ -50,6 +50,15 @@ PAD_3DIGIT_CODE_NETWORKS = {
     "Лента ООО (take-off) с 01.04.2018",
 }
 
+# National networks where alphabetical (non-digit) store codes may appear
+ALPHA_CODE_NETWORKS = {
+    "ГИПЕРГЛОБУС ООО (take-off)",
+    "ОКЕЙ ООО (take off)",
+    "ПЕРЕКРЕСТОК ТД АО",
+    "ПЯТЁРОЧКА",
+    "ТАНДЕР АО (take-off) с 01.04.2018",
+}
+
 # Detskiy Mir distributor and store format prefixes
 DETSKIY_MIR_DISTRIBUTOR = "ДЕТСКИЙ МИР ПАО"
 DETSKIY_MIR_FORMATS = ("ДМ МИНИ", "ДМ", "ЗОО", "РЦ")

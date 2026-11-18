@@ -11,6 +11,7 @@ from config import (
     CODE_AND_SUBNETWORK_DISTRIBUTORS,
     CODE_BASED_NETWORKS,
     PAD_3DIGIT_CODE_NETWORKS,
+    ALPHA_CODE_NETWORKS,
     GLOBUS_DISTRIBUTOR,
     GLOBUS_CITY_ABBREVIATIONS,
     DETSKIY_MIR_DISTRIBUTOR,
@@ -31,7 +32,17 @@ from normalizer import (
     extract_detskiy_mir_format,
     extract_km,
     stem_street_token,
+    extract_fio_surname_patronymic,
+    normalize_surname,
+    NON_SURNAME_WORDS,
 )
+
+# Optional descriptor/prefix stems allowed as one-sided extra tokens in street comparisons
+STREET_OPTIONAL_TOKENS = {
+    'бывш', 'им', 'имени', 'маршала', 'генерала', 'академика', 'адмирала',
+    'проф', 'профессора', 'просп', 'ул', 'пр', 'пер', 'мик', 'мкр',
+    'маг', 'ртт', 'помещ', 'донецк', 'донецкая', 'рынок', 'центральн',
+}
 
 
 def is_subsequence_abbreviation(abbr: str, word: str) -> bool:
@@ -109,6 +120,7 @@ class OutletRecord:
         'dm_format',
         'km',
         'allowed_distributors',
+        'fio_key',
     )
 
     def __init__(self, index: int, raw_row: tuple, col_indices: Dict[str, int]):
@@ -164,8 +176,19 @@ class OutletRecord:
         if not self.km and self.name:
             self.km = extract_km(self.name)
 
-        self.store_code = extract_store_code(self.name, self.distributor)
-        self.clean_name = clean_store_name(self.name)
+        allow_alpha = (
+            bool(self.allowed_distributors & ALPHA_CODE_NETWORKS)
+            if self.is_vendor
+            else (self.distributor in ALPHA_CODE_NETWORKS)
+        )
+        self.store_code = extract_store_code(self.name, self.distributor, allow_alpha_code=allow_alpha)
+        has_national = self.is_national or (
+            self.is_vendor and bool(self.allowed_distributors & NATIONAL_NETWORKS)
+        )
+        self.clean_name = clean_store_name(self.name, strip_leading_id=not has_national)
+        self.fio_key: Optional[Tuple[str, str]] = (
+            None if has_national else extract_fio_surname_patronymic(self.name)
+        )
         self.dm_format: str = ""
         if self.distributor == DETSKIY_MIR_DISTRIBUTOR:
             self.dm_format = extract_detskiy_mir_format(self.name)
@@ -294,6 +317,66 @@ class OutletRecord:
             if len(self.clean_name.split()) >= 2:
                 keys.append((f"name_{self.distributor}_{self.clean_name}", "name"))
             self.blocking_keys = keys
+
+
+def _parse_house_parts(full_house: str) -> Optional[Tuple[str, str, str, str]]:
+    """Splits normalized full_house into (base_num, litera, slash_part, korpus_part)."""
+    if not full_house or full_house == "б/н":
+        return None
+    m = re.match(r'^(\d+)([а-яa-z])?(?:/([0-9а-яa-z]+))?(?:к([0-9а-яa-z]+))?$', full_house)
+    if not m:
+        return None
+    return m.group(1), m.group(2) or '', m.group(3) or '', m.group(4) or ''
+
+
+def _analyze_house_match(full1: str, full2: str) -> Tuple[bool, bool]:
+    """
+    Compares two normalized full_house values.
+    Returns (has_conflict, is_equivalent):
+      - has_conflict is True when both specify different literas (40а vs 40б) or different korpus/stroenie (2кб vs 2к16).
+      - is_equivalent is True when exact or slash/korpus notation represents the same unit (35к12а vs 35/12а).
+    """
+    if full1 == full2:
+        return False, True
+    p1 = _parse_house_parts(full1)
+    p2 = _parse_house_parts(full2)
+    if not p1 or not p2:
+        return False, False
+    _, lit1, slash1, korp1 = p1
+    _, lit2, slash2, korp2 = p2
+    if lit1 and lit2 and lit1 != lit2:
+        return True, False
+    if korp1 and korp2 and korp1 != korp2:
+        return True, False
+    if lit1 == lit2 and (
+        (korp1 and slash2 and korp1 == slash2)
+        or (korp2 and slash1 and korp2 == slash1)
+    ):
+        return False, True
+    return False, False
+
+
+def _is_fio_missing_patronymic_match(outlet1: OutletRecord, outlet2: OutletRecord) -> bool:
+    """
+    Matches 'Surname FirstName Patronymic' against 'Surname FirstName' when one record lacks patronymic
+    and no conflicting corporate markers or extra words exist.
+    """
+    if (outlet1.fio_key is None) == (outlet2.fio_key is None):
+        return False
+    full_rec = outlet1 if outlet1.fio_key is not None else outlet2
+    short_rec = outlet2 if outlet1.fio_key is not None else outlet1
+    if re.search(r'\b(?:ооо|зао|оао|пао)\b', short_rec.name.lower()):
+        return False
+    short_words = short_rec.clean_name.split()
+    full_words = full_rec.clean_name.split()
+    if len(short_words) != 2 or len(full_words) < 3 or len(full_words) > 4:
+        return False
+    if any(not w.isalpha() or len(w) < 2 or w in NON_SURNAME_WORDS for w in short_words):
+        return False
+    return (
+        normalize_surname(short_words[0]) == full_rec.fio_key[0]
+        and short_words[1] in full_words
+    )
 
 
 def calculate_outlet_match_score(
@@ -426,11 +509,19 @@ def calculate_outlet_match_score(
         return 0.0, False
 
     # 2a. House check: If both outlets have explicit house numbers (neither is "б/н"),
-    # different house numbers can NEVER merge!
+    # different house numbers, conflicting literas (40А vs 40Б), or conflicting korpus/stroenie (стр Б vs корп 16) can NEVER merge!
     has_num1 = bool(outlet1.base_house and outlet1.base_house != "б/н")
     has_num2 = bool(outlet2.base_house and outlet2.base_house != "б/н")
 
     if has_num1 and has_num2 and outlet1.base_house != outlet2.base_house:
+        return 0.0, False
+
+    house_conflict, house_match = (
+        _analyze_house_match(outlet1.full_house, outlet2.full_house)
+        if (has_num1 and has_num2)
+        else (False, outlet1.full_house == outlet2.full_house)
+    )
+    if house_conflict:
         return 0.0, False
 
     # 2b. Street check: must have at least one overlapping street token or high fuzzy match
@@ -445,14 +536,18 @@ def calculate_outlet_match_score(
     street_fuzzy = fuzz.token_sort_ratio(street_str1, street_str2) if (street_str1 and street_str2) else 0
 
     if s_set1 and s_set2:
-        diff1 = s_set1 - s_set2
-        diff2 = s_set2 - s_set1
         stem_diff1 = s_stem1 - s_stem2
         stem_diff2 = s_stem2 - s_stem1
-        # If both addresses have distinct specific street tokens and street similarity is low, they conflict!
-        if stem_diff1 and stem_diff2 and street_fuzzy < 70:
-            return 0.0, False
-        if not street_overlap and street_fuzzy < 70:
+        # Compare distinguishing non-overlapping stems so shared generic words (e.g. 'вокзала') don't mask different streets
+        if stem_diff1 and stem_diff2:
+            diff_str1 = ' '.join(sorted(stem_diff1))
+            diff_str2 = ' '.join(sorted(stem_diff2))
+            if fuzz.token_sort_ratio(diff_str1, diff_str2) < 75 and street_fuzzy < 85:
+                return 0.0, False
+        elif (bool(stem_diff1) ^ bool(stem_diff2)) and min(len(s_set1), len(s_set2)) == 1 and street_fuzzy < 65:
+            if not ((stem_diff1 | stem_diff2) & STREET_OPTIONAL_TOKENS):
+                return 0.0, False
+        if not street_overlap and street_fuzzy < 75:
             return 0.0, False
 
     # 2c. City check: if both cities are identified, they must not conflict
@@ -507,11 +602,16 @@ def calculate_outlet_match_score(
 
     # Without store codes: if physical location is incomplete (missing house, missing street, or unverified city),
     # different-named stores cannot be assumed to be identical/similar. They require high name similarity (>= 90).
-    addresses_identical = bool(outlet1.address and outlet2.address and outlet1.address == outlet2.address)
     has_real_house = bool(has_num1 and has_num2 and outlet1.base_house == outlet2.base_house)
     has_real_street = bool((s_set1 and s_set2 and street_overlap) or (s_stem1 and s_stem2 and street_overlap))
     has_real_city = bool(outlet1.city and outlet2.city and city_overlap)
     has_real_km = bool(outlet1.km and outlet2.km and outlet1.km == outlet2.km)
+    addresses_identical = bool(
+        outlet1.address
+        and outlet2.address
+        and outlet1.address == outlet2.address
+        and (has_real_house or has_real_street or has_real_km)
+    )
     location_without_city = bool((not outlet1.city or not outlet2.city) and has_real_street and has_real_house)
 
     is_complete_location = bool(
@@ -520,14 +620,20 @@ def calculate_outlet_match_score(
         (has_real_km and street_overlap and (has_real_house or has_real_city))
     )
 
+    # 4. Determine whether it is an exact (identical) or similar match:
+    is_national = outlet1.is_national or outlet2.is_national
+
+    # Family re-registration / missing-patronymic FIO match at exact same complete physical address + full house
+    if not is_national and is_complete_location and has_real_house and house_match:
+        if outlet1.fio_key is not None and outlet1.fio_key == outlet2.fio_key:
+            return 100.0, True
+        if _is_fio_missing_patronymic_match(outlet1, outlet2):
+            return 100.0, True
+
     if not code_match:
         if not is_complete_location:
             if name_score < 90:
                 return 0.0, False
-
-    # 4. Determine whether it is an exact (identical) or similar match:
-    is_national = outlet1.is_national or outlet2.is_national
-    house_match = (outlet1.full_house == outlet2.full_house)
 
     if is_national:
         # If physical location is incomplete (e.g. missing street or house),
@@ -544,6 +650,15 @@ def calculate_outlet_match_score(
         # (e.g. "Люкс" vs "Перминов В.В ИП"), it must be marked as "Похожая".
         # Exact match requires name similarity >= 95 and same full house.
         is_exact = (name_score >= NAME_EXACT_THRESHOLD) and house_match
+
+    # Ensure Similarity % stays strictly below NAME_EXACT_THRESHOLD whenever status is "Похожая"
+    if not is_exact and score >= NAME_EXACT_THRESHOLD:
+        if not house_match:
+            score = min(score, 85.0)
+        elif code_match:
+            score = max(min(name_score, 90.0), 75.0)
+        else:
+            score = min(score, 90.0)
 
     return score, is_exact
 

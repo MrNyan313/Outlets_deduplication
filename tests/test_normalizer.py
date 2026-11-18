@@ -130,5 +130,82 @@ def test_highway_house_and_name_cleaning():
     assert "тер" not in streets
 
 
+def test_house_extraction_word_boundary_and_hyphen_litera():
+    assert extract_house_components("353900, Краснодарский край, Новороссийск г, Бирюзова ул, дом № 3 СКЛАД") == ("3", "3")
+    assert extract_house_components("297408, Крым Респ, Евпатория г, Токарева ул, дом № 31 маг. Гастроном") == ("31", "31")
+    assert extract_house_components("г. Симферополь, ул. Героев Сталинграда, д. 3-а") == ("3", "3а")
+    assert extract_house_components("г. Макеевка ул. Кирова 9 рынок РТТ место№3 (Кондитерка)") == ("9", "9")
+    assert extract_house_components("Севастопольская 70 Г, бутик №15") == ("70", "70г")
+
+
+def test_store_code_extraction_blocks_false_words_and_preserves_alpha_networks():
+    # Regular distributors must not extract non-digit words as store codes
+    for name in ("Магас Забава (Кулиева 3)", "Магазин", "ИП Юзыкаев Динис Магазович", "МИЛА ООО (Чебоксары)", "Сельмаг", "Колосок"):
+        assert extract_store_code(name, "Сладкая жизнь плюс ООО") == ""
+    assert extract_store_code("Лента611", "Лента ООО (take-off) с 01.04.2018") == "611"
+    # Alphabetical codes preserved for ALPHA_CODE_NETWORKS
+    assert extract_store_code("ЯРС", "ОКЕЙ ООО (take off)") == "ЯPC"
+    assert extract_store_code("Пятерочка MSK", "ПЯТЁРОЧКА") == "MSK"
+    assert extract_store_code("Ашан (MSK)", "АШАН ООО (take-off) с 01.04.2018") == ""
+
+
+def test_address_details_major_city_word_boundary_and_comma_less():
+    _, _, city_msk, streets_msk = extract_address_details("109125, Москва г, Саратовская ул, дом № 24")
+    assert city_msk == "москва"
+    assert streets_msk == ["саратовская"]
+
+    _, _, city_eysk, _ = extract_address_details("353691, Краснодарский край, Ейский р-н, Ейск г, Шоссейный пер, дом № 2, корпус 7")
+    assert city_eysk == "ейск"
+
+    _, _, city_sochi, _ = extract_address_details("354037, Краснодарский край, Сочи г, Шоссейная ул, дом 2б")
+    assert city_sochi == "сочи"
+
+    _, _, city_vol, streets_vol = extract_address_details("г. Москва г.Москва Вольская 1-z 17 1")
+    assert city_vol == "москва"
+    assert "вольская" in streets_vol
+
+    _, _, _, streets_kan = extract_address_details("Канаш ул.Чернышеского 41 кафе Халяль")
+    assert streets_kan == ["чернышеского"]
+
+
+def test_clean_store_name_noise_tails_leading_ids_and_fio():
+    from normalizer import extract_fio_surname_patronymic
+
+    assert clean_store_name("ИП Прокофьева Ульяна Алексеевна НАЛ") == clean_store_name("ИП Прокофьева Ульяна Алексеевна 7 дн")
+    assert clean_store_name("Индивидуальный предприниматель Дерягина Татьяна Николаевна") == clean_store_name("Дерягина Татьяна Николаевна ФЛП")
+    assert clean_store_name("124395 САРБАШ АЛЕКСАНДР СТЕПАНОВИЧ 30ДН.К", strip_leading_id=True) == "сарбаш александр степанович"
+    assert clean_store_name("1000 Мелочей", strip_leading_id=True) == "1000 мелочей"
+    assert clean_store_name("Хейрхабаров Галиб Шахали оглы -Адрес доставки_225", strip_leading_id=True) == "хейрхабаров галиб шахали оглы"
+
+    assert extract_fio_surname_patronymic("ИП КАМАЛОВ МАЗАХИР ТЕЛЬМАН ОГЛЫ") == ("камалов", "тельман оглы")
+    assert extract_fio_surname_patronymic("ИП Камалов Дилгам Тельман оглы") == ("камалов", "тельман оглы")
+    assert extract_fio_surname_patronymic("ИП Бубнов Николай Николаевич") == ("бубнов", "николаевич")
+    assert extract_fio_surname_patronymic("ИП Бубнова Галина Николаевна") == ("бубнов", "николаевич")
+    assert extract_fio_surname_patronymic("ИП Прокофьева Ульяна Алексеевна") != extract_fio_surname_patronymic("ИП Прокофьев Алексей Валерьевич")
+
+
+def test_house_letter_stroenie_slash_and_gorokrug_and_region_streets():
+    # Letter stroenie/korpus and standalone slash fraction
+    assert extract_house_components("350073, Краснодарский край, Краснодар г, им лётчика Позднякова ул, дом 2 стр Б") == ("2", "2кб")
+    assert extract_house_components("Михайловск Ул. Войкова 399/1 м-н Белорусской косметики") == ("399", "399/1")
+
+    # 'г.о.' must not extract 'о' as city
+    _, _, city_mar, _ = extract_address_details("ДНР, г.о. Мариуполь, г. Мариуполь, ул. Воинов-Освободителей, д. 94")
+    assert city_mar == "мариуполь"
+
+    # Region-named streets must be preserved in explicit street patterns, while region-only addresses have no street
+    assert extract_address_details("московская улица, д. 1") == ("1", "1", "", ["московская"])
+    assert extract_address_details("г. Казань, ул. Московская, д. 1") == ("1", "1", "казань", ["московская"])
+    assert extract_address_details("Московская обл, г. Подольск, ул. Московская, д. 1") == ("1", "1", "подольск", ["московская"])
+    assert extract_address_details("Россия, Чувашская Республика - Чувашия") == ("б/н", "б/н", "", [])
+
+    # Extended trade/payment noise cleaning
+    assert clean_store_name("ЭСЕНАЛИЕВ МУРАДИН ЭДО УПД") == "эсеналиев мурадин"
+    assert clean_store_name("ТЕР-МАРТИРОСОВА ЭЛЬМИРА за наличку") == "тер мартиросова эльмира"
+    assert clean_store_name("ЛАЛАЯН АРТУР РОЗНИЦА") == "лалаян артур"
+    assert clean_store_name("ДУЩЕНКО ЕЛЕНА эл.накл. Садовая Т-12") == "дущенко елена садовая"
+    assert clean_store_name("Васильева Елена РОЗНИЦА Шпаковка ЭЛ.НАКЛ.") == "васильева елена шпаковка"
+
+
 
 

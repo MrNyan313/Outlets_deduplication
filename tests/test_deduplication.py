@@ -1171,6 +1171,227 @@ def test_national_network_coverage_scoping_semicolon_distributors():
     assert res_by_id["204"][1] == STATUS_UNIQUE
 
 
+def test_kamalov_family_reregistration_same_address_identical():
+    """
+    Outlets with the exact same physical address + same normalized (surname, patronymic)
+    merge as STATUS_IDENTICAL (100%), while same surname with different patronymic does not.
+    """
+    r_m = make_row(1, "ИП КАМАЛОВ МАЗАХИР ТЕЛЬМАН ОГЛЫ", "109125, Москва г, Саратовская ул, дом № 24", 1, dist="АГОРА КОМПАНИЯ ООО")
+    r_d = make_row(2, "ИП Камалов Дилгам Тельман оглы", "109125, Москва г, Саратовская ул, дом № 24", 0, dist="АГОРА КОМПАНИЯ ООО")
+    r_w = make_row(3, "ИП Прокофьева Ульяна Алексеевна НАЛ", "462114, Оренбургская обл, Черный Отрог с, д. 10", 0, dist="Семыкин Вадим Иванович ИП")
+    r_h = make_row(4, "ИП Прокофьев Алексей Валерьевич 7 дн", "462114, Оренбургская обл, Черный Отрог с, д. 10", 0, dist="Семыкин Вадим Иванович ИП")
+
+    records = [
+        OutletRecord(0, r_m, COL_INDICES),
+        OutletRecord(1, r_d, COL_INDICES),
+        OutletRecord(2, r_w, COL_INDICES),
+        OutletRecord(3, r_h, COL_INDICES),
+    ]
+    results = OutletsDeduplicator(records).run(include_similarity=True)
+    res_by_id = {r[2][0]: r for r in results}
+
+    assert res_by_id["1"][0] == res_by_id["2"][0]
+    assert res_by_id["1"][1] == STATUS_IDENTICAL
+    assert res_by_id["2"][1] == STATUS_IDENTICAL
+    assert res_by_id["2"][3] == 100.0
+
+    # Different patronymics are NOT merged by the family rule
+    assert res_by_id["3"][0] != res_by_id["4"][0]
+
+
+def test_vokzal_savelovsky_vs_kievsky_separated_and_similarity_consistent():
+    """
+    Savelyovsky Vokzal vs Kievsky Vokzal must NOT merge despite shared word 'вокзала'.
+    One-sided stroenie ('д. 2' vs 'д. 2, стр. 16') stays STATUS_SIMILAR with Similarity % < 95.
+    """
+    r_sav_m = make_row(1, 'ООО "ТНП Торг"', "127015, Москва г, Савёловского Вокзала пл, дом № 2", 1, dist="АГОРА КОМПАНИЯ ООО", street="Россия, Москва г, Савёловского Вокзала пл, Дом 2")
+    r_kiev_1 = make_row(2, 'ООО "ТНП Торг"', "121059, Москва г, Киевского Вокзала пл, дом № 2", 0, dist="АГОРА КОМПАНИЯ ООО", street="Россия, Москва г, Киевского Вокзала пл, Дом 2")
+    r_kiev_2 = make_row(3, "ТНП ТОРГ ООО", "121059, Москва г, Киевского Вокзала пл, дом № 2", 0, dist="ЮРВЕС ООО", street="Россия, Москва г, Киевского Вокзала пл, Дом 2")
+    r_sav_16 = make_row(4, "ТНП ТОРГ ООО", "г. Москва, пл. Савеловского вокзала, д. 2, стр. 16, магазин МАНДАРИН", 0, dist="ЮРВЕС ООО", street=" ")
+
+    records = [OutletRecord(i, r, COL_INDICES) for i, r in enumerate([r_sav_m, r_kiev_1, r_kiev_2, r_sav_16])]
+    results = OutletsDeduplicator(records).run(include_similarity=True)
+    res_by_id = {r[2][0]: r for r in results}
+
+    # Savelyovsky master + str. 16 share group, str. 16 is SIMILAR with < 95%
+    assert res_by_id["1"][0] == res_by_id["4"][0]
+    assert res_by_id["4"][1] == STATUS_SIMILAR
+    assert res_by_id["4"][3] < 95.0
+
+    # Kievsky points form their own separate IDENTICAL group
+    assert res_by_id["2"][0] == res_by_id["3"][0]
+    assert res_by_id["2"][0] != res_by_id["1"][0]
+    assert res_by_id["2"][1] == STATUS_IDENTICAL
+    assert res_by_id["3"][1] == STATUS_IDENTICAL
+
+
+def test_korpus_one_sided_similar_not_100_and_sklad_not_litera():
+    """
+    Case 41: 'дом № 57' vs 'дом № 57, корпус 1' -> STATUS_SIMILAR with Similarity % < 95 (not 100%).
+    Case 43: 'дом № 3 СКЛАД' vs 'дом № 3' -> STATUS_IDENTICAL (100%), not misparsed as '3с'.
+    """
+    r41_m = make_row(10, "Каминская ИП Глинки 57", "295033, Крым Респ, Симферополь г, Глинки ул, дом № 57", 1, dist="АТЛАНТ ЮГ ООО")
+    r41_d1 = make_row(11, "Каминская ИП Глинки 57", "295022, Крым Респ, Симферополь г, Глинки ул, дом № 57", 0, dist="АТЛАНТ ЮГ ООО")
+    r41_d2 = make_row(12, "Каминская Л.Н.ИП", "295000, Республика Крым, Симферополь г, Глинки ул, дом № 57, корпус 1", 0, dist="ТД КИНЕТИКА ООО")
+
+    r43_m = make_row(20, "Индивидуальный предприниматель Сорокина Татьяна Александровна_2", "353900, Краснодарский край, Новороссийск г, Бирюзова ул, дом № 3 СКЛАД", 1, dist="АТЛАНТ ЮГ ООО")
+    r43_d = make_row(21, "Индивидуальный предприниматель Сорокина Татьяна Александровна", "353900, Краснодарский край, Новороссийск г, Бирюзова ул, дом № 3", 0, dist="АТЛАНТ ЮГ ООО")
+
+    records = [OutletRecord(i, r, COL_INDICES) for i, r in enumerate([r41_m, r41_d1, r41_d2, r43_m, r43_d])]
+    results = OutletsDeduplicator(records).run(include_similarity=True)
+    res_by_id = {r[2][0]: r for r in results}
+
+    assert res_by_id["10"][0] == res_by_id["11"][0] == res_by_id["12"][0]
+    assert res_by_id["11"][1] == STATUS_IDENTICAL
+    assert res_by_id["12"][1] == STATUS_SIMILAR
+    assert res_by_id["12"][3] < 95.0
+
+    assert res_by_id["20"][0] == res_by_id["21"][0]
+    assert res_by_id["20"][1] == STATUS_IDENTICAL
+    assert res_by_id["21"][1] == STATUS_IDENTICAL
+    assert res_by_id["21"][3] == 100.0
+
+
+def test_noise_cleaning_payment_tails_identical_at_95_threshold():
+    """
+    Payment/legal tails ('НАЛ', '7 дн', '21дн.', 'Индивидуальный предприниматель', 'ФЛП')
+    are cleaned so identical outlets merge as STATUS_IDENTICAL even at 95% threshold.
+    """
+    r1 = make_row(1, "ИП Прокофьева Ульяна Алексеевна НАЛ", "462114, Оренбургская обл, Черный Отрог с, Ленина ул, д. 10", 0)
+    r2 = make_row(2, "ИП Прокофьева Ульяна Алексеевна 7 дн", "462114, Оренбургская обл, Черный Отрог с, Ленина ул, д. 10", 0)
+    r3 = make_row(3, "Индивидуальный предприниматель Дерягина Татьяна Николаевна", "347130, Ростовская обл, Селивановская ст-ца, Кооперативная ул, дом № 48", 0)
+    r4 = make_row(4, "Дерягина Татьяна Николаевна ФЛП", "347130, Ростовская обл, Селивановская ст-ца, Кооперативная ул, дом № 48", 0)
+
+    records = [OutletRecord(i, r, COL_INDICES) for i, r in enumerate([r1, r2, r3, r4])]
+    results = OutletsDeduplicator(records).run(include_similarity=True)
+    res_by_id = {r[2][0]: r for r in results}
+
+    assert res_by_id["1"][0] == res_by_id["2"][0]
+    assert res_by_id["1"][1] == STATUS_IDENTICAL
+    assert res_by_id["2"][1] == STATUS_IDENTICAL
+    assert res_by_id["3"][0] == res_by_id["4"][0]
+    assert res_by_id["3"][1] == STATUS_IDENTICAL
+    assert res_by_id["4"][1] == STATUS_IDENTICAL
+
+
+def test_false_merges_prevented_streets_cities_and_fake_codes():
+    """
+    Regression checks for false merges detected in Capitals deduplication:
+    - Eysk vs Sochi in Krasnodar Krai (ID 3874)
+    - Narodnaya vs Narodnogo Opolcheniya in SPb (ID 1551)
+    - Inghfarma Magas (Mutalieva) vs Magas Zabava (Kulieva) (ID 4066)
+    - Pyaterochka 133 (Volskaya) vs Smart_NN 133 (Glushko) (ID 1952)
+    """
+    pairs = [
+        (
+            make_row(101, "Палехова Виктория Александровна", "353691, Краснодарский край, Ейский р-н, Ейск г, Шоссейный пер, дом № 2, корпус 7", 1),
+            make_row(102, "Шляхова Наталия Александровна ИП", "354037, Краснодарский край, Сочи г, Шоссейная ул, дом 2б", 0),
+        ),
+        (
+            make_row(201, "ООО ТК Прогресс", "193079, Санкт-Петербург г., Народная ул., дом 6, Лит. А", 1),
+            make_row(202, 'ООО "ТК Прогресс"', "198216, Санкт-Петербург, Народного Ополчения пр, дом 6", 0),
+        ),
+        (
+            make_row(301, "Ингфарма, Магас", "386001, Ингушетия Респ, Магас г, Х-Б.Муталиева ул, дом № 3", 1),
+            make_row(302, "Магас Забава (Кулиева 3)", "Ингушетия,г.Магас,ул.Кулиева 3", 0),
+        ),
+        (
+            make_row(401, "133 - г.Мск, п. Некрасовка, 1- г. Москва", "г. Москва г.Москва Вольская 1-z 17 1", 1, dist="ПЯТЁРОЧКА", street=" д 17"),
+            make_row(402, "133 Москва, ул,Академика Глушко, 15", "117216, Город Москва г, Академика Глушко ул", 0, dist="Сладкая жизнь плюс ООО", street="Россия, Москва г, Академика Глушко ул "),
+        ),
+    ]
+
+    for row_a, row_b in pairs:
+        records = [OutletRecord(0, row_a, COL_INDICES), OutletRecord(1, row_b, COL_INDICES)]
+        results = OutletsDeduplicator(records).run()
+        # Master has no match -> excluded; distributor row is UNIQUE
+        assert len(results) == 1
+        assert results[0][2][0] == str(row_b[0])
+        assert results[0][1] == STATUS_UNIQUE
+
+
+def test_gorohov_noise_and_missing_patronymic_become_identical():
+    """
+    Cases 3705, 3707, 3721, 3732, 3743:
+    - Missing patronymic FIO ('ЭСЕНАЛИЕВ МУРАДИН' vs 'ЭСЕНАЛИЕВ МУРАДИН РАМАЗАНОВИЧ') -> IDENTICAL.
+    - 'за наличку', 'РОЗНИЦА', 'Т-12', 'эл.накл.', 'ЭДО' cleaned -> IDENTICAL.
+    """
+    pairs = [
+        (
+            make_row(1, "ЭСЕНАЛИЕВ МУРАДИН РАМАЗАНОВИЧ", "357015, Ставропольский край, м.о. Кочубеевский, с Балахоновское, ул Свободы, двлд. 153 пом 1-5", 1, street="Россия, Ставропольский край, Кочубеевский р-н, Балахоновское с, Свободы ул, Домовладение 153"),
+            make_row(2, "ЭСЕНАЛИЕВ МУРАДИН ЭДО УПД", "357015, Ставропольский край, р-н Кочубеевский, с Балахоновское, ул Свободы, двлд. 153, м.о. Кочубеев", 0, street="Россия, Ставропольский край, Кочубеевский р-н, Балахоновское с, Свободы ул, Домовладение 153"),
+        ),
+        (
+            make_row(3, "ТЕР-МАРТИРОСОВА ЭЛЬМИРА за наличку", "Александровское с, Красноармейская ул, д 618В", 1),
+            make_row(4, "ТЕР-МАРТИРОСОВА ЭЛЬМИРА РОЗНИЦА", "Александровское с, Красноармейская ул, д 618В", 0),
+        ),
+        (
+            make_row(5, "ДУЩЕНКО ЕЛЕНА эл.накл. Садовая Т-12", "Невинномысск ул.Садовая 8 магазин «АВС»", 1),
+            make_row(6, "ДУЩЕНКО ЕЛЕНА эл.накл. Садовая розница", "Невинномысск ул.Садовая 8 магазин «АВС»", 0),
+        ),
+        (
+            make_row(7, "Васильева Елена Т-12 Шпаковка  ЭЛ.НАКЛ.", "Михайловск Ул. Войкова 399/1 м-н Белорусской косметики Красотка", 1, street="Россия, Ставропольский край, Михайловск г, Войкова ул д 399/1М"),
+            make_row(8, "Васильева Елена РОЗНИЦА  Шпаковка  ЭЛ.НАКЛ.", "Михайловск Ул. Войкова 399/1 м-н Белорусской косметики Косметичка", 0, street="Россия, Ставропольский край, Михайловск г, Войкова ул д 399/1М"),
+        ),
+    ]
+    for m_row, d_row in pairs:
+        records = [OutletRecord(0, m_row, COL_INDICES), OutletRecord(1, d_row, COL_INDICES)]
+        results = OutletsDeduplicator(records).run(include_similarity=True)
+        assert len(results) == 2
+        assert results[0][0] == results[1][0]
+        assert results[0][1] == STATUS_IDENTICAL
+        assert results[1][1] == STATUS_IDENTICAL
+        assert results[1][3] == 100.0
+
+
+def test_conflicting_house_litera_and_korpus_never_merge_and_slash_korpus_equivalent():
+    """
+    Cases 3848, 3905, 3955:
+    - 40А vs 40 Б -> NEVER merge (not even as Похожая).
+    - дом 2 стр Б vs дом 2, корп. 16 vs корп. 24 -> NEVER merge across different korpus/stroenie.
+    - дом № 35, корпус 12А vs дом 35/12А -> equivalent, merge as STATUS_IDENTICAL.
+    """
+    # 3848: 40А vs 40 Б
+    r_40a = make_row(1, "Ярус ООО (Алексеевка)", "309850, Белгородская обл, Алексеевка г, 1-й Народный пер, дом № 40А", 1)
+    r_40b = make_row(2, "Ярус ООО", "309850, Белгородская обл, Алексеевка г, Народный пер, дом № 40 Б", 0)
+    res_3848 = OutletsDeduplicator([OutletRecord(0, r_40a, COL_INDICES), OutletRecord(1, r_40b, COL_INDICES)]).run()
+    assert len(res_3848) == 1
+    assert res_3848[0][1] == STATUS_UNIQUE
+
+    # 3905: стр Б vs корп. 16 vs корп. 24
+    r_strb = make_row(10, "Амизян Артур А. ИП", "350073, Краснодарский край, Краснодар г, им лётчика Позднякова ул, дом 2 стр Б", 1)
+    r_k16 = make_row(11, "Амизян Артур А. ИП", "350073, Краснодарский край, Краснодар г, им лётчика Позднякова ул, дом 2, корп. 16", 0)
+    r_k24 = make_row(12, "Амизян Артур А. ИП", "350073, Краснодарский край, Краснодар г, им лётчика Позднякова ул, дом 2, корп. 24", 0)
+    res_3905 = OutletsDeduplicator([OutletRecord(i, r, COL_INDICES) for i, r in enumerate([r_strb, r_k16, r_k24])]).run()
+    assert len(res_3905) == 2
+    assert res_3905[0][0] != res_3905[1][0]
+    assert res_3905[0][1] == STATUS_UNIQUE
+    assert res_3905[1][1] == STATUS_UNIQUE
+
+    # 3955: корпус 12А vs /12А -> IDENTICAL
+    r_k12a = make_row(20, "Новый Квартал ООО", "354008, Краснодарский край, Сочи г, Рахманинова пер, дом № 35, корпус 12А", 1)
+    r_s12a = make_row(21, "Новый-Квартал ООО", "354008, Краснодарский край, Сочи г, Рахманинова пер, дом 35/12А", 0)
+    res_3955 = OutletsDeduplicator([OutletRecord(0, r_k12a, COL_INDICES), OutletRecord(1, r_s12a, COL_INDICES)]).run(include_similarity=True)
+    assert len(res_3955) == 2
+    assert res_3955[0][0] == res_3955[1][0]
+    assert res_3955[1][1] == STATUS_IDENTICAL
+    assert res_3955[1][3] == 100.0
+
+
+def test_region_only_address_different_people_never_merge():
+    """
+    Case 13216: Identical region-only string ('Чувашская Республика') without city/street/house
+    must not treat address as complete location -> different IP owners stay separate.
+    """
+    r1 = make_row(1, "Малахова Татьяна Леонидовна ИП", "Чувашская Республика", 0, street="Россия, Чувашская Республика - Чувашия ")
+    r2 = make_row(2, "Москвина Светлана Леонидовна ИП", "Чувашская Республика", 0, street="Россия, Чувашская Республика - Чувашия ")
+    results = OutletsDeduplicator([OutletRecord(0, r1, COL_INDICES), OutletRecord(1, r2, COL_INDICES)]).run()
+    assert len(results) == 2
+    assert results[0][0] != results[1][0]
+    assert results[0][1] == STATUS_UNIQUE
+    assert results[1][1] == STATUS_UNIQUE
+
+
 
 
 
