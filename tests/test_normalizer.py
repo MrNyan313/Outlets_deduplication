@@ -189,15 +189,21 @@ def test_house_letter_stroenie_slash_and_gorokrug_and_region_streets():
     assert extract_house_components("350073, Краснодарский край, Краснодар г, им лётчика Позднякова ул, дом 2 стр Б") == ("2", "2кб")
     assert extract_house_components("Михайловск Ул. Войкова 399/1 м-н Белорусской косметики") == ("399", "399/1")
 
-    # 'г.о.' must not extract 'о' as city
+    # 'г.о.' must not extract 'о' as city, and must not corrupt city names starting with 'Го...'
     _, _, city_mar, _ = extract_address_details("ДНР, г.о. Мариуполь, г. Мариуполь, ул. Воинов-Освободителей, д. 94")
     assert city_mar == "мариуполь"
+    assert extract_address_details("г. Горно-Алтайск, ул. Ленина, 5") == ("5", "5", "горно-алтайск", ["ленина"])
+    assert extract_address_details("Нижегородская обл, г. Городец, ул. Новая, 1") == ("1", "1", "городец", ["новая"])
 
     # Region-named streets must be preserved in explicit street patterns, while region-only addresses have no street
     assert extract_address_details("московская улица, д. 1") == ("1", "1", "", ["московская"])
     assert extract_address_details("г. Казань, ул. Московская, д. 1") == ("1", "1", "казань", ["московская"])
     assert extract_address_details("Московская обл, г. Подольск, ул. Московская, д. 1") == ("1", "1", "подольск", ["московская"])
+    assert extract_address_details("г. Москва, ул. Донецкая, д. 10") == ("10", "10", "москва", ["донецкая"])
     assert extract_address_details("Россия, Чувашская Республика - Чувашия") == ("б/н", "б/н", "", [])
+    assert extract_address_details("Ханты-Мансийский автономный округ - Югра") == ("б/н", "б/н", "", [])
+    assert extract_address_details("Республика Саха (Якутия)") == ("б/н", "б/н", "", [])
+    assert extract_address_details("Ямало-Ненецкий автономный округ, муниципальный округ, с. Аксарка") == ("б/н", "б/н", "аксарка", [])
 
     # Extended trade/payment noise cleaning
     assert clean_store_name("ЭСЕНАЛИЕВ МУРАДИН ЭДО УПД") == "эсеналиев мурадин"
