@@ -1392,6 +1392,144 @@ def test_region_only_address_different_people_never_merge():
     assert results[1][1] == STATUS_UNIQUE
 
 
+def test_single_letter_litera_and_korpus_equivalence_and_conflict():
+    """
+    Cases 1218 & 1262:
+    - Single-letter house litera ('7а', '1а') matches identical single-letter korpus ('7, корпус А', '1, корпус а') -> IDENTICAL.
+    - Conflicting single-letter litera vs single-letter korpus ('7а' vs '7, корпус Б') -> NEVER merge.
+    """
+    # 1218: 7а vs 7, корпус А
+    m1 = make_row(1, "ИП Алибекова Алиса Хаирбековна 30 дн", "462800, Оренбургская обл, Новоорский р-н, Новоорск п, Красноуральская ул, дом № 7а", 1, dist="Семыкин Вадим Иванович ИП; СПЛАТ ГЛОБАЛ")
+    d1 = make_row(2, "ИП Алибекова Алиса Хаирбековна 21 дн", "462800, Оренбургская обл, Новоорский р-н, Новоорск п, Красноуральская ул, дом № 7, корпус А", 0, dist="Семыкин Вадим Иванович ИП")
+    res1 = OutletsDeduplicator([OutletRecord(0, m1, COL_INDICES), OutletRecord(1, d1, COL_INDICES)]).run(include_similarity=True)
+    assert len(res1) == 2
+    assert res1[0][0] == res1[1][0]
+    assert res1[0][1] == STATUS_IDENTICAL
+    assert res1[1][1] == STATUS_IDENTICAL
+    assert res1[1][3] == 100.0
+
+    # 1262: д. 1а, кв. 8 vs дом № 1, корпус а, кв.8
+    m2 = make_row(3, "ИП Сарсенова Альбина Ризовна", "РБ, г. Баймак, ул. Мира, д. 1а, кв. 8", 1, dist="Семыкин Вадим Иванович ИП; СПЛАТ ГЛОБАЛ")
+    d2 = make_row(4, "ИП Сарсенова Альбина Ризовна 21 дн", "453632, Башкортостан Респ, Баймакский р-н, Баймак г, Мира ул, дом № 1, корпус а, кв.8", 0, dist="Семыкин Вадим Иванович ИП")
+    res2 = OutletsDeduplicator([OutletRecord(0, m2, COL_INDICES), OutletRecord(1, d2, COL_INDICES)]).run(include_similarity=True)
+    assert len(res2) == 2
+    assert res2[0][0] == res2[1][0]
+    assert res2[0][1] == STATUS_IDENTICAL
+    assert res2[1][1] == STATUS_IDENTICAL
+    assert res2[1][3] == 100.0
+
+    # Negative: 7а vs 7, корпус Б -> NEVER merge
+    d_conflict = make_row(5, "ИП Алибекова Алиса Хаирбековна 21 дн", "462800, Оренбургская обл, Новоорский р-н, Новоорск п, Красноуральская ул, дом № 7, корпус Б", 0, dist="Семыкин Вадим Иванович ИП")
+    res3 = OutletsDeduplicator([OutletRecord(0, m1, COL_INDICES), OutletRecord(1, d_conflict, COL_INDICES)]).run()
+    assert len(res3) == 1
+    assert res3[0][1] == STATUS_UNIQUE
+
+
+def test_no_house_addresses_aligned_to_similar():
+    """
+    Case 4108: Addresses without a house number ('б/н') must consistently be marked as STATUS_SIMILAR (75.0%),
+    even when raw address strings happen to be literally identical ('г Москва, ул Наташи Ковшовой').
+    """
+    m = make_row(1, "ПЛЕС-С", "г Москва, ул Наташи Ковшовой", 1, dist="АГУР ООО; СПЛАТ ГЛОБАЛ", street="Россия, Москва г, Наташи Ковшовой ул ")
+    d1 = make_row(2, "ПЛЕС-С", "г Москва, ул Наташи Ковшовой", 0, dist="АГУР ООО", street="Россия, Москва г, Наташи Ковшовой ул ")
+    d2 = make_row(3, "ПЛЕС-С", "г. Москва, ул Наташи Ковшовой", 0, dist="АГУР ООО", street="Россия, Москва г, Наташи Ковшовой ул ")
+    results = OutletsDeduplicator([
+        OutletRecord(0, m, COL_INDICES),
+        OutletRecord(1, d1, COL_INDICES),
+        OutletRecord(2, d2, COL_INDICES),
+    ]).run(include_similarity=True)
+
+    assert len(results) == 3
+    assert results[0][0] == results[1][0] == results[2][0]
+    assert results[0][1] == STATUS_SIMILAR
+    assert results[1][1] == STATUS_SIMILAR and results[1][3] == 75.0
+    assert results[2][1] == STATUS_SIMILAR and results[2][3] == 75.0
+
+
+def test_empty_address_rows_do_not_swallow_real_addresses_and_group_as_similar():
+    """
+    Cases 13157 & 18023:
+    - Empty-address rows ('Чувашская Республика') must NEVER swallow real-addressed outlets of the same name.
+    - Real-addressed outlets at 'Йошкар-Ола, ул Строителей 29А' across distributors merge into ONE IDENTICAL group.
+    - Other cities stay separate.
+    - Empty-address rows of the same (distributor, clean_name) group ONLY among themselves as STATUS_SIMILAR (75.0%).
+    """
+    rows = [
+        make_row(1, "ПЛЕС-С", "Чувашская Республика", 0, dist="АГУР ООО", street="Россия, Чувашская Республика - Чувашия "),
+        make_row(2, "ПЛЕС-С", "Чувашская Республика", 0, dist="АГУР ООО", street="Россия, Чувашская Республика - Чувашия "),
+        make_row(3, "ПЛЕС-С", "Марий Эл, г Йошкар-Ола, ул Строителей 29А", 0, dist="АГУР ООО", street="Россия, Марий Эл Респ, Йошкар-Ола г, Строителей ул, Дом 29А "),
+        make_row(4, "ПЛЕС-С", "Марий Эл, г Йошкар-Ола, ул Строителей 29А", 0, dist="АГУР ООО", street="Россия, Марий Эл Респ, Йошкар-Ола г, Строителей ул, Дом 29А "),
+        make_row(5, "ПЛЕС-С", "г Барнаул, снт Кораблик, д 42", 0, dist="АГУР ООО", street="Россия, Алтайский край, Барнаул г, Кораблик снт д 42"),
+        make_row(6, "ПЛЕС-С", "Марий Эл, г Йошкар-Ола, ул Строителей 29А", 0, dist="ОНАР-12 ООО", street="Россия, Марий Эл Респ, Йошкар-Ола г, Строителей ул, Дом 29А "),
+        make_row(7, "ПЛЕС-С", "Марий Эл, г Йошкар-Ола, ул Строителей 29А", 0, dist="ОНАР-12 ООО", street="Россия, Марий Эл Респ, Йошкар-Ола г, Строителей ул, Дом 29А "),
+    ]
+    results = OutletsDeduplicator([OutletRecord(i, r, COL_INDICES) for i, r in enumerate(rows)]).run(include_similarity=True)
+    by_id = {r[2][COL_INDICES['id']]: r for r in results}
+
+    # 4 Yoshkar-Ola rows from both distributors -> ONE IDENTICAL group
+    yoshkar_gids = {by_id[str(i)][0] for i in (3, 4, 6, 7)}
+    assert len(yoshkar_gids) == 1
+    for i in (3, 4, 6, 7):
+        assert by_id[str(i)][1] == STATUS_IDENTICAL
+        assert by_id[str(i)][3] == 100.0
+
+    # Barnaul -> separate UNIQUE
+    assert by_id['5'][1] == STATUS_UNIQUE
+    assert by_id['5'][0] not in yoshkar_gids
+
+    # 2 empty rows -> ONE group, both SIMILAR (75.0%), separate from real addresses
+    assert by_id['1'][0] == by_id['2'][0]
+    assert by_id['1'][0] not in yoshkar_gids
+    assert by_id['1'][0] != by_id['5'][0]
+    assert by_id['1'][1] == STATUS_SIMILAR and by_id['1'][3] == 75.0
+    assert by_id['2'][1] == STATUS_SIMILAR and by_id['2'][3] == 75.0
+
+
+def test_multilocation_name_key_disabled_while_single_location_preserved():
+    """
+    Multi-location regular (distributor, clean_name) disables the name-only blocking key so empty rows
+    never attach randomly to one of multiple stores, while genuinely single-location IP owners still match.
+    """
+    # 1. Multi-location IP (2 stores + 2 empty rows): empty rows group only with each other as SIMILAR
+    multi_rows = [
+        make_row(10, "Гусева Елизавета Николаевна ИП", "Чувашская Республика", 0, dist="АГУР ООО", street="Россия, Чувашская Республика - Чувашия "),
+        make_row(11, "Гусева Елизавета Николаевна ИП", "425450, Республика Марий Эл, пгт Сернур, ул Казанская, д. 15", 0, dist="АГУР ООО"),
+        make_row(12, "Гусева Елизавета Николаевна ИП", "424000, Республика Марий Эл, г Йошкар-Ола, ул Ленина, д. 20", 0, dist="АГУР ООО"),
+        make_row(13, "ГУСЕВА Елизавета Николаевна ИП", "Чувашская Республика", 0, dist="АГУР ООО", street="Россия, Чувашская Республика - Чувашия "),
+    ]
+    res_multi = OutletsDeduplicator([OutletRecord(i, r, COL_INDICES) for i, r in enumerate(multi_rows)]).run(include_similarity=True)
+    by_id_m = {r[2][COL_INDICES['id']]: r for r in res_multi}
+    assert by_id_m['11'][1] == STATUS_UNIQUE
+    assert by_id_m['12'][1] == STATUS_UNIQUE
+    assert by_id_m['10'][0] == by_id_m['13'][0]
+    assert by_id_m['10'][0] not in {by_id_m['11'][0], by_id_m['12'][0]}
+    assert by_id_m['10'][1] == STATUS_SIMILAR and by_id_m['10'][3] == 75.0
+    assert by_id_m['13'][1] == STATUS_SIMILAR and by_id_m['13'][3] == 75.0
+
+    # 2. Single-location IP (1 store + 1 empty row): still matches as SIMILAR with real store as leader
+    single_rows = [
+        make_row(20, "Малахова Татьяна Леонидовна ИП", "Чувашская Республика", 0, dist="АГУР ООО", street="Россия, Чувашская Республика - Чувашия "),
+        make_row(21, "Малахова Татьяна Леонидовна ИП", "424019, Республика Марий Эл, г Йошкар-Ола, ул Красноармейская, д. 120Б", 0, dist="АГУР ООО"),
+    ]
+    res_single = OutletsDeduplicator([OutletRecord(i, r, COL_INDICES) for i, r in enumerate(single_rows)]).run(include_similarity=True)
+    by_id_s = {r[2][COL_INDICES['id']]: r for r in res_single}
+    assert by_id_s['20'][0] == by_id_s['21'][0]
+    assert by_id_s['21'][1] == STATUS_IDENTICAL
+    assert by_id_s['20'][1] == STATUS_SIMILAR and by_id_s['20'][3] == 75.0
+
+    # 3. Multi-location spanning master + distrib (house 23 in master, house 25 in distrib + 1 empty row)
+    mixed_rows = [
+        make_row(30, "Кропотов Дмитрий Васильевич ИП", "425550, Марий Эл Респ, пгт Куженер, ул Советская, д. 23", 1, dist="АГУР ООО; СПЛАТ ГЛОБАЛ"),
+        make_row(31, "Кропотов Дмитрий Васильевич ИП", "425550, Марий Эл Респ, пгт Куженер, ул Советская, д. 25", 0, dist="АГУР ООО"),
+        make_row(32, "Кропотов Дмитрий Васильевич ИП", "Чувашская Республика", 0, dist="АГУР ООО", street="Россия, Чувашская Республика - Чувашия "),
+    ]
+    res_mixed = OutletsDeduplicator([OutletRecord(i, r, COL_INDICES) for i, r in enumerate(mixed_rows)]).run(include_similarity=True)
+    by_id_x = {r[2][COL_INDICES['id']]: r for r in res_mixed}
+    assert by_id_x['31'][0] != by_id_x['32'][0]
+    assert by_id_x['31'][1] == STATUS_UNIQUE
+    assert by_id_x['32'][1] == STATUS_UNIQUE
+
+
 
 
 

@@ -314,9 +314,67 @@ class OutletRecord:
                 store_code=self.store_code,
                 km=self.km,
             )
-            if len(self.clean_name.split()) >= 2:
+            if len([w for w in self.clean_name.split() if len(w) >= 2]) >= 2:
                 keys.append((f"name_{self.distributor}_{self.clean_name}", "name"))
+            if _has_no_geography(self) and len(self.clean_name) >= 3:
+                keys.append((f"empty_{self.distributor}_{self.clean_name}", "empty"))
             self.blocking_keys = keys
+
+
+def _has_no_geography(rec: OutletRecord) -> bool:
+    """Returns True when a record has no extracted city, street, house number, or highway km."""
+    return (
+        not rec.city
+        and not rec.street_tokens
+        and (not rec.base_house or rec.base_house == "б/н")
+        and not rec.km
+    )
+
+
+def _address_completeness_rank(rec: OutletRecord) -> int:
+    """
+    Orders records from most complete physical address (0) to least complete (4)
+    so real-addressed records become group leaders before partial, empty, or short records.
+    """
+    if getattr(rec, "is_globus_short", False):
+        return 4
+    has_house = bool(rec.base_house and rec.base_house != "б/н")
+    has_street = bool(rec.street_tokens)
+    has_city = bool(rec.city)
+    has_km = bool(rec.km)
+    if (has_city and has_street and has_house) or (has_km and has_street):
+        return 0
+    if has_house and (has_street or has_city):
+        return 1
+    if has_city or has_street or has_house or has_km:
+        return 2
+    return 3
+
+
+def _has_conflicting_locations(locs: Dict[str, set]) -> bool:
+    """
+    Returns True when a (distributor, clean_name) pair spans 2+ conflicting real locations
+    (different house numbers, non-overlapping street stems, or distinct cities).
+    """
+    if len(locs["houses"]) >= 2:
+        return True
+    cities = list(locs["cities"])
+    for i in range(len(cities)):
+        c1 = cities[i]
+        c_set1 = set(c1.split())
+        for j in range(i + 1, len(cities)):
+            c2 = cities[j]
+            if not (c_set1 & set(c2.split())) and fuzz.token_sort_ratio(c1, c2) < 65:
+                return True
+    streets = list(locs["streets"])
+    for i in range(len(streets)):
+        s1 = streets[i]
+        s1_str = " ".join(sorted(s1))
+        for j in range(i + 1, len(streets)):
+            s2 = streets[j]
+            if not (s1 & s2) and fuzz.token_sort_ratio(s1_str, " ".join(sorted(s2))) < 75:
+                return True
+    return False
 
 
 def _parse_house_parts(full_house: str) -> Optional[Tuple[str, str, str, str]]:
@@ -333,8 +391,10 @@ def _analyze_house_match(full1: str, full2: str) -> Tuple[bool, bool]:
     """
     Compares two normalized full_house values.
     Returns (has_conflict, is_equivalent):
-      - has_conflict is True when both specify different literas (40а vs 40б) or different korpus/stroenie (2кб vs 2к16).
-      - is_equivalent is True when exact or slash/korpus notation represents the same unit (35к12а vs 35/12а).
+      - has_conflict is True when both specify different literas (40а vs 40б), different korpus/stroenie
+        (2кб vs 2к16), or conflicting single-letter litera vs korpus (7а vs 7кб).
+      - is_equivalent is True when exact, slash/korpus notation represents the same unit (35к12а vs 35/12а),
+        or single-letter litera matches single-letter korpus/stroenie (7а vs 7ка).
     """
     if full1 == full2:
         return False, True
@@ -353,6 +413,17 @@ def _analyze_house_match(full1: str, full2: str) -> Tuple[bool, bool]:
         or (korp2 and slash1 and korp2 == slash1)
     ):
         return False, True
+    # Single-letter litera vs single-letter korpus/stroenie (e.g. '7а' vs '7ка' -> equivalent; '7а' vs '7кб' -> conflict)
+    if (
+        lit1 and not slash1 and not korp1
+        and not lit2 and not slash2 and len(korp2) == 1 and korp2.isalpha()
+    ):
+        return (lit1 != korp2), (lit1 == korp2)
+    if (
+        lit2 and not slash2 and not korp2
+        and not lit1 and not slash1 and len(korp1) == 1 and korp1.isalpha()
+    ):
+        return (lit2 != korp1), (lit2 == korp1)
     return False, False
 
 
@@ -610,7 +681,7 @@ def calculate_outlet_match_score(
         outlet1.address
         and outlet2.address
         and outlet1.address == outlet2.address
-        and (has_real_house or has_real_street or has_real_km)
+        and (has_real_house or has_real_km)
     )
     location_without_city = bool((not outlet1.city or not outlet2.city) and has_real_street and has_real_house)
 
@@ -721,13 +792,54 @@ class OutletsDeduplicator:
                 unmatched_distrib.append(d_rec)
 
         # Step 3: Match remaining distributor records among themselves
-        # Sort unmatched_distrib so that full-address records are evaluated before short-address records
-        # This ensures full records become group leaders and short records are attached as "Похожая"
-        unmatched_distrib.sort(key=lambda r: 1 if getattr(r, "is_globus_short", False) else 0)
+        # Disable name-only blocking key for multi-location regular (distributor, clean_name) pairs
+        # so empty/partial records never attach randomly to one of multiple real stores.
+        name_locs: Dict[Tuple[str, str], Dict[str, set]] = {}
+        relevant_names = set()
+        for d_rec in self.distrib_records:
+            if d_rec.is_national or not d_rec.clean_name:
+                continue
+            if not any(k_type == "name" for _, k_type in d_rec.blocking_keys):
+                continue
+            pair = (d_rec.distributor, d_rec.clean_name)
+            relevant_names.add(d_rec.clean_name)
+            entry = name_locs.setdefault(pair, {"cities": set(), "streets": set(), "houses": set()})
+            if d_rec.city:
+                entry["cities"].add(d_rec.city)
+            if d_rec.street_tokens:
+                entry["streets"].add(frozenset(stem_street_token(s) for s in d_rec.street_tokens))
+            if d_rec.base_house and d_rec.base_house != "б/н":
+                entry["houses"].add(d_rec.base_house)
+
+        if relevant_names:
+            for m_rec in self.master_records:
+                if m_rec.clean_name not in relevant_names:
+                    continue
+                for dist in m_rec.allowed_distributors:
+                    entry = name_locs.get((dist, m_rec.clean_name))
+                    if entry is None:
+                        continue
+                    if m_rec.city:
+                        entry["cities"].add(m_rec.city)
+                    if m_rec.street_tokens:
+                        entry["streets"].add(frozenset(stem_street_token(s) for s in m_rec.street_tokens))
+                    if m_rec.base_house and m_rec.base_house != "б/н":
+                        entry["houses"].add(m_rec.base_house)
+
+        ambiguous_name_keys = {
+            f"name_{dist}_{cname}"
+            for (dist, cname), locs in name_locs.items()
+            if _has_conflicting_locations(locs)
+        }
+
+        # Sort unmatched_distrib so full-address records become group leaders before partial, empty, or short records
+        unmatched_distrib.sort(key=_address_completeness_rank)
 
         dist_index = defaultdict(list)
         for u_idx, d_rec in enumerate(unmatched_distrib):
             for key in d_rec.blocking_keys:
+                if key[1] == "name" and key[0] in ambiguous_name_keys:
+                    continue
                 dist_index[key].append(u_idx)
 
         dist_groups: List[List[Tuple[OutletRecord, str, float]]] = []
@@ -743,15 +855,17 @@ class OutletsDeduplicator:
             # Find candidates
             candidates = set()
             for key in d_rec.blocking_keys:
+                if key[1] == "name" and key[0] in ambiguous_name_keys:
+                    continue
                 if key in dist_index:
                     for cand_idx in dist_index[key]:
                         if cand_idx not in visited_dist_indices:
                             candidates.add(cand_idx)
 
-            # Sort candidates so full-address records are evaluated before short-address records
+            # Sort candidates so more complete addresses are evaluated first
             sorted_candidates = sorted(
                 candidates,
-                key=lambda idx: 1 if getattr(unmatched_distrib[idx], "is_globus_short", False) else 0
+                key=lambda idx: _address_completeness_rank(unmatched_distrib[idx])
             )
             matched_cands: List[Tuple[OutletRecord, str, float]] = []
             for cand_idx in sorted_candidates:
@@ -775,8 +889,10 @@ class OutletsDeduplicator:
 
             if matched_cands:
                 has_ident = any(s == STATUS_IDENTICAL for _, s, _ in matched_cands)
-                main_status = STATUS_IDENTICAL if (has_ident or not getattr(d_rec, "is_globus_short", False)) else STATUS_SIMILAR
-                current_group.append((d_rec, main_status, 100.0))
+                is_weak_leader = getattr(d_rec, "is_globus_short", False) or _has_no_geography(d_rec)
+                main_status = STATUS_IDENTICAL if (has_ident or not is_weak_leader) else STATUS_SIMILAR
+                leader_score = 75.0 if main_status == STATUS_SIMILAR else 100.0
+                current_group.append((d_rec, main_status, leader_score))
                 current_group.extend(matched_cands)
                 dist_groups.append(current_group)
             else:
