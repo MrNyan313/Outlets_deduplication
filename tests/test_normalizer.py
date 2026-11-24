@@ -292,5 +292,34 @@ def test_numbered_stopword_city_and_initialed_streets_extracted_correctly():
     assert extract_address_details('Чеченская Респ, Курчалоевский р-н, Курчалой г, 1Южная ул, дом № 1') == ("1", "1", "курчалой", ["южная"])
 
 
+def test_fallback_street_tail_cutoff_slash_gln_quoted_litera_and_initials_in_name():
+    # 1. Fallback street extraction strips trailing house/shop noise while keeping leading 'м-н' microdistricts & markets
+    assert extract_address_details('Обл. Донецкая г. Макеевка кв-л Металлург 16 РТТ маг."Бытовая химия"') == ("16", "16", "макеевка", ["металлург"])
+    assert extract_address_details('ДНР, г. Макеевка, Горняцкий р-н, м-н Зеленый, д.2, маг. "Бытовая химия"') == ("2", "2", "макеевка", ["зеленый"])
+    assert extract_address_details('ДНР, г. Кировское, м-н Горняцкий, д. 5') == ("5", "5", "кировское", ["горняцкий"])
+    assert extract_address_details('Северная Осетия - Алания Респ, Владикавказ г, Первомайский рынок') == ("б/н", "б/н", "владикавказ", ["первомайский", "рынок"])
+
+    # 2. Trailing 5+ digit accounting/GLN code after slash is NOT a house fraction (case 3754)
+    assert extract_house_components('ЕвроРитейл, "Спар № 76", г. Калининград, ул. К. Маркса, д. 18  / 390645030') == ("18", "18")
+    assert extract_house_components('ЕвроРитейл, "Спар № 71", г. Калининград, ул. А. Невского, д. 137 Б  /390645024') == ("137", "137б")
+    assert extract_house_components('ЕвроРитейл, "Спар № 90", г. Гурьевск, Пражский бульвар, 1 Ж   /391745002') == ("1", "1ж")
+    # Real 1-4 digit house fractions remain intact
+    assert extract_house_components('г. Ростов-на-Дону, 40-я линия ул, дом № 57/31') == ("57", "57/31")
+
+    # 3. Quoted single-letter house literas are unwrapped, while quoted shop names are untouched (case 3848, 4712)
+    assert extract_house_components('Лавренчук Л.В., г Калининград, ул. Ю. Бульвар, 2"А"') == ("2", "2а")
+    assert extract_house_components('Ростовская обл, Батайск г, Пятигорская ул, дом № 112 "Г"') == ("112", "112г")
+    assert extract_house_components('РК, Усть-Куломский р-н, с.Усть-Кулом, ул.Советская, д. 33 "Б"') == ("33", "33б")
+    assert extract_house_components('692502, Приморский край, г. Уссурийск, ул. Владивостокское шоссе, 93 «А» база') == ("93", "93а")
+    assert extract_house_components('г. Москва, ул. Ленина, д. 12 "Магнит"') == ("12", "12")
+
+    # 4. clean_store_name removes initials without chopping the first letter of following words
+    assert clean_store_name('ЕвроРитейл, "Спар № 76", г. Калининград, ул. К. Маркса, д. 18  / 390645030') == "евроритейл спар 76 калининград ул маркса 18 390645030"
+    assert clean_store_name('Лавренчук Л.В., г Калининград, ул. Ю. Бульвар, 2"А"') == "лавренчук г калининград ул бульвар 2 а"
+    assert clean_store_name('Лавренчук И.П. г. Калининград, ул. Юж.Бульвар, д. 2а') == "лавренчук калининград ул юж бульвар 2а"
+    assert clean_store_name('ИП Петров А.В') == "петров"
+    assert clean_store_name('ИП Петров А. В.') == "петров"
+
+
 
 

@@ -201,6 +201,17 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     # Remove 6-digit postal code
     t = re.sub(r'\b\d{6}\b', '', t)
 
+    # Strip trailing 5+ digit internal accounting/GLN codes after slash (e.g. 'д. 18 / 390645030')
+    t = re.sub(r'\s*[/\\]\s*\d{5,}\b.*$', '', t).strip()
+
+    # Unwrap single-letter house literas enclosed in quotes (e.g. '2"А"' -> '2а', '93 «А» база' -> '93а база', 'лит. "А"' -> 'лит. а')
+    t = re.sub(r'(\d)\s*["\'«„“]([а-яa-z])["\'»“”]', r'\1\2', t)
+    t = re.sub(
+        r'(\b(?:к|корп|корпус|стр|строение|лит|литера)\.?)\s*["\'«„“]([а-яa-z])["\'»“”]',
+        r'\1 \2',
+        t,
+    )
+
     # Strip trailing annotations in parentheses like "(А)", "(К)", "(пом. 3)"
     t = re.sub(r'[\s,]*\([а-яa-z0-9\s\.\-]+\)\s*$', '', t).strip()
 
@@ -218,7 +229,7 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     # 1. House with korpus/building/stroenie: e.g. "15, к 3", "д.15,к.3", "15 стр 3", "дом 2 стр Б", "д. 15 корп 2"
     m1 = re.search(
         r'(?:(?:дом|д|зд|здание)\.?\s*(?:№\s*)?)?'
-        r'(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]|-[а-яa-z]))?(?:\s*[/\\-]\s*(\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?))?'
+        r'(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]|-[а-яa-z]))?(?:\s*[/\\-]\s*(\d{1,4}(?!\d)(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?))?'
         r'(?:[,\s/\\-]+|(?<=\d))'
         r'(?:(?:к|корп|корпус|стр|строение|лит|литера)\.?\s*(\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?|[а-яa-z](?![а-яa-z]|-[а-яa-z]))|п\.?\s*(\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?))',
         t
@@ -238,7 +249,7 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     # 2. Explicit marker: дом, д., зд., здание, вл, влд, владение, уч, участок
     m2 = re.search(
         r'\b(?:дом|д|зд|здание|вл|влд|владение|уч|участок)\.?\s*(?:№\s*)?'
-        r'(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]|-[а-яa-z]))?(?:\s*[/\\-]\s*(\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?))?',
+        r'(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]|-[а-яa-z]))?(?:\s*[/\\-]\s*(\d{1,4}(?!\d)(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?))?',
         t
     )
     if m2:
@@ -268,7 +279,7 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     # Strip trailing punctuation before checking end of string
     t_no_date = t_no_date.rstrip(' ,.;')
     m4 = re.search(
-        r'[, ]+(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]|-[а-яa-z]))?(?:\s*[/\\-]\s*(\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?))?\s*$',
+        r'[, ]+(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]|-[а-яa-z]))?(?:\s*[/\\-]\s*(\d{1,4}(?!\d)(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?))?\s*$',
         t_no_date
     )
     if m4:
@@ -282,7 +293,7 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
 
     # 5. Standalone number (with optional slash fraction like 399/1) that is not postal code
     nums = re.findall(
-        r'\b(\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?(?:\s*[/\\]\s*\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?)?)\b',
+        r'\b(\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?(?:\s*[/\\]\s*\d{1,4}(?!\d)(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?)?)\b',
         t_no_date
     )
     if nums:
@@ -415,8 +426,8 @@ def clean_store_name(name: str, strip_leading_id: bool = False) -> str:
     t = re.sub(r'\b(?:т|тел)\.?\s*[:\-]?\s*(?:\+7|8|7)?[\d\-]{7,12}\b', ' ', t)
     # Remove quotes, brackets, store symbols
     t = re.sub(r'["\'\(\)\[\]«»„“”№#_]', ' ', t)
-    # Remove person initials like "в.в.", "е.а."
-    t = re.sub(r'\b[а-яa-z]\s*\.\s*[а-яa-z]?\s*\.?', ' ', t)
+    # Remove person initials like "в.в.", "е.а.", "а.в" without chopping the first letter of following words (e.g. "г. Калининград")
+    t = re.sub(r'\b[а-яa-z]\s*\.\s*(?:[а-яa-z]\s*\.?(?![а-яa-z]))?', ' ', t)
     # Remove km phrases (e.g. "7 км", "7-й км") so "ГМ Москва Пятницкое 7 км" -> "гм москва пятницкое"
     t = re.sub(r'\b\d+[- ]*(?:й|ой|ий|ый|ая)?\s*(?:км|километр)\b', ' ', t, flags=re.IGNORECASE)
     words = re.findall(r'[а-яa-z0-9]+', t)
@@ -684,7 +695,7 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
         for m in re.finditer(pat, addr_clean_no_km):
             cand = m.group(1).strip()
             cand = re.split(
-                r'(?<=[а-яa-z])\s+\d+(?!-[а-яa-z])\b|\s+\b(?:дом|д|зд|стр|корп|к|пом|оф|кв|рынок|кафе|павильон|место|бутик|контейнер|тц|трц|тк)\b',
+                r'(?<=[а-яa-z])\s+\d+(?!-[а-яa-z])\b|\s+\b(?:дом|д|зд|стр|корп|к|пом|оф|кв|ртт|маг|магазин|рынок|кафе|павильон|место|бутик|контейнер|тц|трц|тк)\b',
                 cand,
             )[0]
             cand = re.sub(r'^\d+(?![\d_])\s*|(?:\s+|^)\d+$', '', cand).strip()
@@ -726,11 +737,20 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
 
     # Fallback if street pattern didn't match: exclude all region/city/settlement/stop words
     if not street_words:
-        all_words = re.findall(r'[а-яa-z0-9_]+', addr_clean_no_km)
-        for w in all_words:
-            if len(w) >= 3 and w not in ADDRESS_STOP_WORDS and w not in settlement_words and ('_' in w or not any(c.isdigit() for c in w)):
-                if not city or w not in city.split():
-                    street_words.append(w)
+        # Cut off trailing house/shop details (e.g. 'кв-л Металлург 16 РТТ маг."Бытовая химия"' -> '... Металлург')
+        # Preserve leading microdistricts ('м-н Горняцкий, д. 5') and standalone landmarks ('Первомайский рынок')
+        fb_text = re.split(
+            r'\b(?:дом|д\.?\s*(?:№\s*)?\d|зд\.?\s*(?:№\s*)?\d|здание|ртт|маг\.?(?=\s|$|["«„])|магазин|павильон|контейнер|бутик|тц|трц|тк)\b|\b\d+[а-яa-z]?(?:[/\\]\d+)?\s+(?:ртт|маг|магазин|тц|трц|тк|павильон)\b',
+            addr_clean_no_km,
+        )[0]
+        for candidate_src in (fb_text, addr_clean_no_km):
+            all_words = re.findall(r'[а-яa-z0-9_]+', candidate_src)
+            for w in all_words:
+                if len(w) >= 3 and w not in ADDRESS_STOP_WORDS and w not in settlement_words and ('_' in w or not any(c.isdigit() for c in w)):
+                    if not city or w not in city.split():
+                        street_words.append(w)
+            if street_words:
+                break
 
     return base_house, full_house, city, street_words
 

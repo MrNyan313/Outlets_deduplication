@@ -35,6 +35,7 @@ from normalizer import (
     extract_fio_surname_patronymic,
     normalize_surname,
     NON_SURNAME_WORDS,
+    ADDRESS_STOP_WORDS,
 )
 
 # Optional descriptor/prefix stems allowed as one-sided extra tokens in street comparisons
@@ -42,6 +43,13 @@ STREET_OPTIONAL_TOKENS = {
     'бывш', 'им', 'имени', 'маршала', 'генерала', 'академика', 'адмирала',
     'проф', 'профессора', 'просп', 'ул', 'пр', 'пер', 'мик', 'мкр',
     'маг', 'ртт', 'помещ', 'донецк', 'донецкая', 'рынок', 'центральн',
+}
+
+# Address words/abbreviations ignored when verifying real entity-name similarity for address-in-name records
+_ADDR_NAME_NOISE = ADDRESS_STOP_WORDS | {
+    'пр', 'кт', 'д', 'к', 'с', 'п', 'г', 'р', 'н', 'л', 'ца', 'он',
+    'помещ', 'корп', 'стр', 'лит', 'з', 'зд', 'влд', 'вл', 'уч',
+    'обл', 'респ', 'рф', 'до', 'б',
 }
 
 
@@ -708,6 +716,66 @@ def calculate_outlet_match_score(
         if not is_complete_location:
             if name_score < 90:
                 return 0.0, False
+
+        # Guard against different legal entities matching solely because both Name fields repeat the shared address
+        # (e.g. 'Чеботарев В.В. Алушта, ул Набережная, д. 6' vs 'ФУНТЪ ООО г Алушта, ул Набережная, д. 6, помещ. 5',
+        # or 'Гастроном ООО г. Нальчик' whose clean_name shrank to just city 'нальчик').
+        if not is_national and name_score >= NAME_SIMILAR_THRESHOLD:
+            addr_words = set()
+            for o in (outlet1, outlet2):
+                if o.city:
+                    addr_words.update(o.city.split())
+                for st in o.street_tokens:
+                    addr_words.add(st)
+                    if '_' in st:
+                        addr_words.update(st.split('_'))
+                for dm in re.finditer(
+                    r'\b([а-яa-z\-]{3,})\s+(?:р-н|р-он|район|района|обл|область|край|респ)\b|\b(?:р-н|р-он|район)\.?\s+([а-яa-z\-]{3,})',
+                    o.address.lower().replace('ё', 'е'),
+                ):
+                    dw = dm.group(1) or dm.group(2)
+                    if dw:
+                        addr_words.add(dw)
+            addr_stems = {stem_street_token(w) for w in addr_words if len(w) >= 3}
+            house_tokens = set()
+            for o in (outlet1, outlet2):
+                if o.base_house and o.base_house != "б/н":
+                    house_tokens.add(o.base_house)
+                if o.full_house and o.full_house != "б/н":
+                    house_tokens.add(o.full_house)
+                    house_tokens.update(re.findall(r'[0-9а-яa-z]+', o.full_house))
+
+            def _split_addr_tokens(clean_n: str) -> Tuple[List[str], set]:
+                kept, removed = [], set()
+                for w in clean_n.split():
+                    if (
+                        w in _ADDR_NAME_NOISE
+                        or w in addr_words
+                        or w in house_tokens
+                        or (len(w) >= 3 and stem_street_token(w) in addr_stems)
+                    ):
+                        removed.add(w)
+                    elif (w.isdigit() and len(w) == 6) or len(w) < 2:
+                        removed.add(w)
+                    else:
+                        kept.append(w)
+                return kept, removed
+
+            rem1, addr_in_n1 = _split_addr_tokens(name1)
+            rem2, addr_in_n2 = _split_addr_tokens(name2)
+            # If one name was a subset of the other ONLY via shared address tokens (e.g. 'нальчик' in 'альфа плюс нальчик...'),
+            # do not let token_set_ratio inflate score to 100%; fall back to token_sort_ratio.
+            if (addr_in_n1 & addr_in_n2) and (not rem1 or not rem2) and (rem1 or rem2):
+                if not (w1 - w2) or not (w2 - w1):
+                    name_score = token_sort
+                    score = name_score
+                    if score < NAME_SIMILAR_THRESHOLD:
+                        return 0.0, False
+            # Trigger rejection when BOTH names contained shared address tokens AND both have real non-address entity words left
+            if (addr_in_n1 & addr_in_n2) and rem1 and rem2:
+                real_sim = fuzz.token_set_ratio(' '.join(rem1), ' '.join(rem2))
+                if real_sim < 50:
+                    return 0.0, False
 
     if is_national:
         # If physical location is incomplete (e.g. missing street or house),

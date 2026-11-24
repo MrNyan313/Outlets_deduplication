@@ -1639,6 +1639,63 @@ def test_numbered_and_lettered_streets_match_variants_and_reject_different_numbe
         assert res[1][1] == STATUS_UNIQUE
 
 
+def test_spar_gln_slash_identical_and_address_in_name_does_not_merge_different_entities():
+    """
+    - Case 3754: '/ 390645030' internal code after house number does not block STATUS_IDENTICAL (100%).
+    - Case 140 / old 6088: 'Чеботарев В.В. Алушта, ул Набережная, д. 6' must NOT hijack
+      'ФУНТЪ ООО г Алушта, ул Набережная, д. 6, помещ. 5' via shared address tokens inside Name;
+      both 'ФУНТЪ ООО' distributor rows merge cleanly as STATUS_IDENTICAL (100%).
+    - Address-only Name ('299029, Севастополь г, Шабалина ул, дом 7А') still matches 'Апекс Плюс (Севастополь/Шабалина)'.
+    """
+    # 1. Case 3754: Spar / 390645030 -> IDENTICAL 100%
+    m_spar = make_row(1, 'ООО ЕвроРитейл""', 'Калининградская область, г. Калининград, ул. Карла Маркса, д. 18', 1, dist='КРОН ООО; СПЛАТ ГЛОБАЛ')
+    d_spar = make_row(2, 'ЕвроРитейл, "Спар № 76", г. Калининград, ул. К. Маркса, д. 18  / 390645030', 'ЕвроРитейл, "Спар № 76", г. Калининград, ул. К. Маркса, д. 18  / 390645030', 0, dist='ЮНИТОН ООО')
+    res_spar = OutletsDeduplicator([OutletRecord(0, m_spar, COL_INDICES), OutletRecord(1, d_spar, COL_INDICES)]).run(include_similarity=True)
+    assert len(res_spar) == 2
+    assert res_spar[0][0] == res_spar[1][0]
+    assert res_spar[0][1] == STATUS_IDENTICAL
+    assert res_spar[1][1] == STATUS_IDENTICAL
+    assert res_spar[1][3] == 100.0
+
+    # 2. Case 140 / old 6088: Чеботарев must NOT hijack ФУНТЪ ООО; both ФУНТЪ rows merge identically
+    m_cheb = make_row(10, 'Чеботарев В.В. Алушта, ул Набережная, д. 6', '298500, Республика Крым, г Алушта, ул Набережная, д. 6', 1, dist='АТЛАНТ ЮГ ООО; СПЛАТ ГЛОБАЛ')
+    d_funt1 = make_row(11, 'ФУНТЪ ООО', '298500, Республика Крым, г Алушта, ул Набережная, д. 6, помещ. 6', 0, dist='АТЛАНТ ЮГ ООО')
+    d_funt2 = make_row(12, 'ФУНТЪ ООО г Алушта, ул Набережная, д. 6, помещ. 5', '298500, Республика Крым, г Алушта, ул Набережная, д. 6, помещ. 5', 0, dist='АТЛАНТ ЮГ ООО')
+    res_funt = OutletsDeduplicator([
+        OutletRecord(0, m_cheb, COL_INDICES),
+        OutletRecord(1, d_funt1, COL_INDICES),
+        OutletRecord(2, d_funt2, COL_INDICES),
+    ]).run(include_similarity=True)
+    # Master Чеботарев has no match -> excluded; both ФУНТЪ rows form ONE IDENTICAL group
+    assert len(res_funt) == 2
+    assert res_funt[0][0] == res_funt[1][0]
+    assert res_funt[0][1] == STATUS_IDENTICAL
+    assert res_funt[1][1] == STATUS_IDENTICAL
+    assert {r[2][COL_INDICES['id']] for r in res_funt} == {'11', '12'}
+
+    # 3. Safety guard: address-only Name on one side STILL matches as SIMILAR
+    m_apex = make_row(20, 'Апекс Плюс ( Севастополь/Шабалина)', '299029, Севастополь г, Шабалина ул, дом 7А', 1, dist='АТЛАНТ ЮГ ООО; СПЛАТ ГЛОБАЛ')
+    d_apex = make_row(21, '299029, Севастополь г, Шабалина ул, дом 7А', '299029, Севастополь г, Шабалина ул, дом 7А', 0, dist='АТЛАНТ ЮГ ООО')
+    res_apex = OutletsDeduplicator([OutletRecord(0, m_apex, COL_INDICES), OutletRecord(1, d_apex, COL_INDICES)]).run(include_similarity=True)
+    assert len(res_apex) == 2
+    assert res_apex[0][0] == res_apex[1][0]
+    assert res_apex[1][1] == STATUS_SIMILAR
+
+    # 4. City-only clean_name ('Гастроном ООО г. Нальчик' -> 'нальчик') must NOT swallow other companies at same address
+    m_gast = make_row(30, 'Гастроном ООО г. Нальчик-ООО "Гастроном"', '360005, КБР,г. Нальчик,ул. Кирова, 5 "Б"', 1)
+    d_alfa = make_row(31, 'Альфа-Плюс ООО №503 (Нальчик, ул. Кирова 5 Б)', '360003, Кабардино-Балкарская Респ, Нальчик г, Кирова ул, дом № 5, корпус б', 0)
+    res_gast = OutletsDeduplicator([OutletRecord(0, m_gast, COL_INDICES), OutletRecord(1, d_alfa, COL_INDICES)]).run()
+    assert len(res_gast) == 1
+    assert res_gast[0][1] == STATUS_UNIQUE
+
+    # 5. District-in-name ('Черняховский р-он') must not merge Вербицкий with Кошель
+    m_verb = make_row(40, 'Вербицкий В.Л., Черняховский р-он, п Краснополянское, ул Московская, д. 4', 'Калининградская обл.,Черняховский р-он, п Краснополянское, ул Московская, д. 4', 1)
+    d_kosh = make_row(41, 'Кошель А.О., Черняховский р-он, п. Краснополянское, ул. Московская, д. 4', 'Кошель А.О., Черняховский р-он, п. Краснополянское, ул. Московская, д. 4', 0)
+    res_vk = OutletsDeduplicator([OutletRecord(0, m_verb, COL_INDICES), OutletRecord(1, d_kosh, COL_INDICES)]).run()
+    assert len(res_vk) == 1
+    assert res_vk[0][1] == STATUS_UNIQUE
+
+
 
 
 
