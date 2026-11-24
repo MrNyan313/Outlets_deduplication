@@ -213,5 +213,84 @@ def test_house_letter_stroenie_slash_and_gorokrug_and_region_streets():
     assert clean_store_name("Васильева Елена РОЗНИЦА Шпаковка ЭЛ.НАКЛ.") == "васильева елена шпаковка"
 
 
+def test_mn_abbr_not_house_litera_and_district_and_rural_settlement_city():
+    # Hyphenated 'м-н' after house number must NOT be captured as litera 'м' (cases 5157, 5197, 5226)
+    assert extract_house_components('Чувашская Республика, пгт Вурнары, пер Зеленый, д. 13 м-н "Мила 2"') == ("13", "13")
+    assert extract_house_components('Республика Марий Эл, г Козьмодемьянск, ул Комсомольская, д. 29 м-н Континент') == ("29", "29")
+    assert extract_house_components('425550, Республика Марий Эл, пгт Куженер, ул Совхозная д.10 м-н "ЛИДЕР"') == ("10", "10")
+    # Real literas (including hyphenated '3-а' and '13а-2') must remain intact
+    assert extract_house_components('ул. Ленина, д. 3-а') == ("3", "3а")
+    assert extract_house_components('ул. Ленина, д. 13а-2') == ("13", "13а/2")
+
+    # District 'р-н Волжский' / 'Волжский р-н' must NOT be hijacked by MAJOR_CITIES 'волжский' (case 5131)
+    assert extract_address_details(
+        '425030, Марий Эл Респ, р-н Волжский, пгт Приволжский, ул Рыночная площадь, д. 7'
+    ) == ("7", "7", "приволжский", ["рыночная"])
+    _, _, city_paraty, _ = extract_address_details(
+        '425016, Марий Эл Респ, Волжский р-н, Новые Параты с, Центральная ул, д. 5'
+    )
+    assert city_paraty == "параты"
+    # Real city Volzhsky must still be detected
+    assert extract_address_details('Волгоградская обл, г. Волжский, ул. Ленина, 10') == ("10", "10", "волжский", ["ленина"])
+
+    # Parenthetical rural settlement '(Верх-Ушнурское с/п)' / '(Бриляковский с/с)' must not override settlement name (case 5259)
+    assert extract_address_details(
+        '424039, 425418, Марий Эл Респ, Советский р-н, Верх-Ушнур (Верх-Ушнурское с/п) с, Центральная ул, дом № 1, корпус А, бокс м-н "Надежда"'
+    ) == ("1", "1ка", "верх-ушнур", ["центральная"])
+    assert extract_address_details(
+        '606534, Нижегородская обл, Городецкий р-н, Бриляково (Бриляковский с/с) с, Мира ул, д. 5'
+    ) == ("5", "5", "бриляково", ["мира"])
+
+
+def test_numbered_stopword_city_and_initialed_streets_extracted_correctly():
+    # 1. Numbered / lettered lines, quarters, microdistricts, lanes (cases 1071, 1181, 1238, 1091, 2273, 2863, 3947)
+    assert extract_address_details('461047, Оренбургская обл, Бузулук г, 1 Линия ул, дом № 3') == ("3", "3", "бузулук", ["1_линия"])
+    assert extract_address_details('Россия, Оренбургская обл, Бузулук г, 1-я Линия ул, Дом 3') == ("3", "3", "бузулук", ["1_линия"])
+    assert extract_address_details('457134, Челябинская обл, Троицкий р-н, Бобровка с, 4 Квартал ул, дом № 6, кв.29') == ("6", "6", "бобровка", ["4_квартал"])
+    assert extract_address_details('457105, Челябинская обл, Троицк г, 10-й кв-л, дом № 29, кв.93') == ("29", "29", "троицк", ["10_квартал"])
+    assert extract_address_details('452613, Башкортостан Респ, Октябрьский г, 35-й мкр, дом № 33') == ("33", "33", "октябрьский", ["35_мкр"])
+    assert extract_address_details('г. Байканур; микрорайон 5;д. 19А') == ("19", "19а", "байканур", ["5_мкр"])
+    assert extract_address_details('199004, Санкт-Петербург г, 2-я В.О. линия, дом № 39/16') == ("39", "39/16", "санкт-петербург", ["2_линия"])
+    assert extract_address_details('385019, Республика Адыгея (Адыгея), г Майкоп, пер 5-й, д. 2') == ("2", "2", "майкоп", ["5_пер"])
+    assert extract_address_details('385730, Адыгея Респ, г. Майкоп, ул. 5-ый переулок, д. 2') == ("2", "2", "майкоп", ["5_пер"])
+    assert extract_address_details('142200, Московская область обл, Серпухов г, Арнеево д, Квартал А тер., дом № 185') == ("185", "185", "серпухов", ["а_квартал"])
+    assert extract_address_details('142290, Московская область обл, Пущино г, В мкр, дом № 6') == ("6", "6", "пущино", ["в_мкр"])
+    assert extract_address_details('142290, Московская область обл, Пущино г, Г мкр, дом № 21б') == ("21", "21б", "пущино", ["г_мкр"])
+    # Preposition 'в мкр. Северное Чертаново' must NOT become 'в_мкр'
+    assert extract_address_details('г. Москва, в мкр. Северное Чертаново, д. 5') == ("5", "5", "москва", ["северное", "чертаново"])
+
+    # 2. Stopword-named & village-named explicit streets (cases 1363, 1294, 2989, 3244, 3604)
+    assert extract_address_details('462802, Оренбургская обл, Новоорский р-н, Кумак с, Набережная ул, дом № 38') == ("38", "38", "кумак", ["набережная"])
+    assert extract_address_details('165514, Архангельская область, п Приозерный, ул Набережная, д. 6') == ("6", "6", "приозерный", ["набережная"])
+    assert extract_address_details('457103, Челябинская обл, Троицк г, Российская ул, дом № 8') == ("8", "8", "троицк", ["российская"])
+    assert extract_address_details('613050, Кировская обл, Кирово-Чепецк г., Россия пр-кт, дом № 32') == ("32", "32", "кирово-чепецк", ["россия"])
+    assert extract_address_details('607404, Нижегородская область обл, Перевоз г, Шпилево с, Микрорайон ул, дом № 13б') == ("13", "13б", "перевоз", ["микрорайон"])
+    assert extract_address_details('425468, Республика Марий Эл Респ, Сернурский р-н, Ананур д, Ананур ул, дом № 86') == ("86", "86", "ананур", ["ананур"])
+
+    # 3. Initialed street names before and after surname (cases 1153, 1629, 4438, 4763, 5697, 5798, 16992)
+    assert extract_address_details('453662, Башкортостан Респ, Баймакский р-н, Нижнеидрисово д, С.Юлаева ул, дом № 14') == ("14", "14", "нижнеидрисово", ["юлаева"])
+    assert extract_address_details('457109, Челябинская обл, Троицк г, им Т.Д.Дерибаса ул, дом № 18А') == ("18", "18а", "троицк", ["дерибаса"])
+    assert extract_address_details('Краснодарский край, Курганинский р-н, Курганинск г, Ст.Разина ул, дом 5') == ("5", "5", "курганинск", ["разина"])
+    assert extract_address_details('352800, Краснодарский край, Туапсинский р-н, Туапсе г, Г.Петровой ул, дом 1') == ("1", "1", "туапсе", ["петровой"])
+    assert extract_address_details('Северная Осетия - Алания Респ, Алагирский р-н, Алагир г, С.Кодоева ул, дом № 43') == ("43", "43", "алагир", ["кодоева"])
+    assert extract_address_details('361820, Кабардино-Балкарская Респ, Черекский р-н, Аушигер с, Бадракова С.Х. ул, дом № 167') == ("167", "167", "аушигер", ["бадракова"])
+    assert extract_address_details('368000, Дагестан Респ, Хасавюрт г, Шевелева С. С.ул, здание 37, строение 37') == ("37", "37к37", "хасавюрт", ["шевелева"])
+    # 'кв. Норинского, д.2, кв.94' must extract house '2', while trailing 'кв.П2'/'кв.пом. 013' must still be cut off
+    assert extract_address_details('ЛНР, г. Луганск, кв. Норинского, д.2, кв.94') == ("2", "2", "луганск", ["норинского"])
+    assert extract_house_components('Нижний Новгород г, Левобережная ул, дом № 4, кв.П2') == ("4", "4")
+    assert extract_house_components('Красногорск г, Игоря Мерлушкина ул, дом № 1, кв.пом. 013') == ("1", "1")
+    # Anniversary / numbered streets without comma or dot after 'ул' preserve city and canonical N_лет token
+    assert extract_address_details('Обл р-н. Енакиевский г. Енакиево ул. 50 лет октября 33 РТТ маг. "Ника"') == ("33", "33", "енакиево", ["50_лет", "октября"])
+    assert extract_address_details('г. Енакиево ул 30 лет победы 12') == ("12", "12", "енакиево", ["30_лет", "победы"])
+    assert extract_address_details('г. Енакиево ул 30-летия Победы 12') == ("12", "12", "енакиево", ["30_лет", "победы"])
+    assert extract_address_details('г. Енакиево ул 40 лет октября 15') == ("15", "15", "енакиево", ["40_лет", "октября"])
+    assert extract_address_details('г. Енакиево ул 60-летия СССР 10') == ("10", "10", "енакиево", ["60_лет", "ссср"])
+    assert extract_address_details('г. Енакиево ул 26 Бакинских комиссаров 7') == ("7", "7", "енакиево", ["бакинских", "комиссаров"])
+    assert extract_house_components('г. Енакиево, ул. 30-летия Победы') == ("б/н", "б/н")
+    # Raw underscores in addresses and glued leading digits before street name must still normalize cleanly
+    assert extract_address_details('286157, ДНР, г. Макеевка, ул. Московская_35055')[3] == ["московская"]
+    assert extract_address_details('Чеченская Респ, Курчалоевский р-н, Курчалой г, 1Южная ул, дом № 1') == ("1", "1", "курчалой", ["южная"])
+
+
 
 

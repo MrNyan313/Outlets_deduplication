@@ -89,12 +89,32 @@ MAJOR_CITIES = {
     'орел', 'орёл'
 }
 
-STREET_TYPES = r'(?:ул|улица|пр-кт|проспект|пр-д|проезд|пр|пер|переулок|бул|бульвар|шоссе|ш|наб|набережная|пл|площадь|аллея|тракт|тупик|автодорога|а/д)'
+STREET_TYPES = r'(?:ул|улица|пр-кт|проспект|пр-д|проезд|пр|пер|переулок|бул|бульвар(?!\s+(?:ул|улица)\b)|шоссе|ш|наб|набережная(?!\s+(?:ул|улица|пер|переулок|пр-кт|проспект)\b)|пл|площадь(?!\s+(?:ул|улица)\b)|аллея(?!\s+(?:ул|улица)\b)|тракт|тупик|автодорога|а/д)'
+
+_STREET_INITIALS = r'(?:[а-яa-z]{1,2}\.\s*){1,2}'
 
 STREET_PATTERNS = [
-    rf'\b{STREET_TYPES}(?:\.\s*|\s+)([а-яa-z0-9\-]+(?:\s+[а-яa-z0-9\-]+){{0,2}})',
-    rf'([а-яa-z0-9\-]+(?:\s+[а-яa-z0-9\-]+){{0,2}})[,\s]+\b{STREET_TYPES}(?:\.|\b)'
+    rf'\b{STREET_TYPES}(?:\.\s*|\s+)((?:{_STREET_INITIALS})?[а-яa-z0-9\-_]+(?:\s+(?:{_STREET_INITIALS}|[а-яa-z0-9\-_]+)){{0,2}})',
+    rf'((?:{_STREET_INITIALS})?[а-яa-z0-9\-_]+(?:\s+(?:{_STREET_INITIALS}|[а-яa-z0-9\-_]+)){{0,2}})(?:[,\s]+|(?<=\.))\b{STREET_TYPES}(?:\.|\b)'
 ]
+
+# Stop-words that can legitimately be standalone street names inside an explicit street pattern (e.g. 'Набережная ул', 'Российская ул')
+NAMED_STOPWORD_STREETS = {
+    'набережная', 'российская', 'россия', 'микрорайон',
+    'городская', 'городской', 'окружная', 'окружной',
+    'районная', 'районный', 'сельская', 'сельский',
+    'областная', 'краевая', 'республиканская', 'федеральная',
+    'площадь', 'линия', 'квартал', 'бульвар', 'бульварная', 'аллея', 'тракт',
+}
+
+_NUM_UNIT_CANON = {
+    'линия': 'линия',
+    'квартал': 'квартал', 'кв-л': 'квартал', 'квл': 'квартал',
+    'мкр': 'мкр', 'мкр-н': 'мкр', 'микрорайон': 'мкр',
+    'пер': 'пер', 'переулок': 'пер',
+    'пр-д': 'пр-д', 'проезд': 'пр-д',
+    'ул': 'ул', 'улица': 'ул',
+}
 
 # Mapping Cyrillic lookalikes to Latin for store codes
 CYR_TO_LAT = str.maketrans('АВЕКМНОРСТУХ', 'ABEKMHOPCTYX')
@@ -189,17 +209,18 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     t = re.sub(pat_km, ' ', t, flags=re.IGNORECASE)
 
     # Cut off interior unit info (apartment, office, room, market stall/booth)
+    # Skip 'кв-л' and 'кв. <quarter>, д. <num>' so quarter prefixes before a house number are not cut off
     t = re.split(
-        r'\b(?:кв|квартира|пом|помещение|комн|оф|офис|эт|этаж|место|контейнер|бутик|павильон|секция)\b',
+        r'\b(?:кв(?!-л)(?![^,]*,\s*(?:дом|д|зд|здание)\.?\s*(?:№\s*)?\d)|квартира|пом|помещение|комн|оф|офис|эт|этаж|место|контейнер|бутик|павильон|секция)\b',
         t
     )[0].strip()
 
     # 1. House with korpus/building/stroenie: e.g. "15, к 3", "д.15,к.3", "15 стр 3", "дом 2 стр Б", "д. 15 корп 2"
     m1 = re.search(
         r'(?:(?:дом|д|зд|здание)\.?\s*(?:№\s*)?)?'
-        r'(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]))?(?:\s*[/\\-]\s*(\d+(?:[а-яa-z](?![а-яa-z]))?))?'
+        r'(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]|-[а-яa-z]))?(?:\s*[/\\-]\s*(\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?))?'
         r'(?:[,\s/\\-]+|(?<=\d))'
-        r'(?:(?:к|корп|корпус|стр|строение|лит|литера)\.?\s*(\d+(?:[а-яa-z](?![а-яa-z]))?|[а-яa-z](?![а-яa-z]))|п\.?\s*(\d+(?:[а-яa-z](?![а-яa-z]))?))',
+        r'(?:(?:к|корп|корпус|стр|строение|лит|литера)\.?\s*(\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?|[а-яa-z](?![а-яa-z]|-[а-яa-z]))|п\.?\s*(\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?))',
         t
     )
     if m1:
@@ -217,7 +238,7 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
     # 2. Explicit marker: дом, д., зд., здание, вл, влд, владение, уч, участок
     m2 = re.search(
         r'\b(?:дом|д|зд|здание|вл|влд|владение|уч|участок)\.?\s*(?:№\s*)?'
-        r'(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]))?(?:\s*[/\\-]\s*(\d+(?:[а-яa-z](?![а-яa-z]))?))?',
+        r'(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]|-[а-яa-z]))?(?:\s*[/\\-]\s*(\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?))?',
         t
     )
     if m2:
@@ -231,7 +252,7 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
 
     # 3. корпус / строение directly followed by number (standalone, e.g. "стр 15", "к514")
     m3 = re.search(
-        r'\b(?:корпус\s*строение|строение|корпус|корп|стр|к)\.?\s*(?:№\s*)?(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]))?',
+        r'\b(?:корпус\s*строение|строение|корпус|корп|стр|к)\.?\s*(?:№\s*)?(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]|-[а-яa-z]))?',
         t
     )
     if m3:
@@ -239,15 +260,15 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
         lit = m3.group(2) or ''
         return base_num, base_num + lit
 
-    # Strip date/anniversary numbers (e.g. "8 марта", "9 мая", "1905 года") so they are not treated as house numbers
-    pat_date = r'\b\d+[- ]*(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря|года|лет(?:\s+[а-яa-z]+)?)\b'
+    # Strip date/anniversary numbers (e.g. "8 марта", "9 мая", "1905 года", "30-летия Победы") so they are not treated as house numbers
+    pat_date = r'\b\d+[- ]*(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря|года|лет(?:ия)?(?:\s+[а-яa-z]+)?)\b'
     t_no_date = re.sub(pat_date, '', t, flags=re.IGNORECASE)
 
     # 4. Number at end of address string or after comma: e.g. "Татищева бульвар, 6а" or "ул 21"
     # Strip trailing punctuation before checking end of string
     t_no_date = t_no_date.rstrip(' ,.;')
     m4 = re.search(
-        r'[, ]+(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]))?(?:\s*[/\\-]\s*(\d+(?:[а-яa-z](?![а-яa-z]))?))?\s*$',
+        r'[, ]+(\d+)\s*(?:[-\s]*(?!й\b)([а-яa-z])(?![а-яa-z]|-[а-яa-z]))?(?:\s*[/\\-]\s*(\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?))?\s*$',
         t_no_date
     )
     if m4:
@@ -261,7 +282,7 @@ def extract_house_components(addr: str) -> Tuple[str, str]:
 
     # 5. Standalone number (with optional slash fraction like 399/1) that is not postal code
     nums = re.findall(
-        r'\b(\d+(?:[а-яa-z](?![а-яa-z]))?(?:\s*[/\\]\s*\d+(?:[а-яa-z](?![а-яa-z]))?)?)\b',
+        r'\b(\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?(?:\s*[/\\]\s*\d+(?:[а-яa-z](?![а-яa-z]|-[а-яa-z]))?)?)\b',
         t_no_date
     )
     if nums:
@@ -491,6 +512,63 @@ def extract_detskiy_mir_format(name: str) -> str:
     return ""
 
 
+def _extract_numbered_or_lettered_street(text: str) -> List[str]:
+    """
+    Extracts canonical numbered/lettered street or microdistrict tokens when no word-named street exists.
+    e.g. '1 Линия ул' / '1-я Линия ул' -> ['1_линия']
+         '4 Квартал ул' / '4-й кв-л' / 'кв-л 4' -> ['4_квартал']
+         '35-й мкр' / '24 мкр' / 'микрорайон 5' -> ['35_мкр'], ['24_мкр'], ['5_мкр']
+         'пер 5-й' / 'ул. 5-ый переулок' -> ['5_пер']
+         'Квартал А' / 'В мкр' -> ['а_квартал'], ['в_мкр']
+    """
+    m = re.search(
+        r'(?:^|[^а-яa-z0-9])(\d+)(?:-?(?:й|я|ый|ая|ой|ий|е|ое))?\s*'
+        r'(?:в\.?\s*о\.?\s*)?(линия|квартал|кв-л|квл|мкр-н|мкр|микрорайон)\b',
+        text,
+    )
+    if m:
+        return [f"{m.group(1)}_{_NUM_UNIT_CANON[m.group(2)]}"]
+
+    m = re.search(
+        r'\b(линия|квартал|кв-л|квл|мкр-н|мкр|микрорайон)\.?\s*(?:№\s*)?(\d+)(?:-?(?:й|я|ый|ая|ой|ий|е|ое))?(?=$|[^а-яa-z0-9])',
+        text,
+    )
+    if m:
+        return [f"{m.group(2)}_{_NUM_UNIT_CANON[m.group(1)]}"]
+
+    m = re.search(
+        r'(?:^|[^а-яa-z0-9])(\d+)(?:-?(?:й|я|ый|ая|ой|ий)\s*(переулок|пер|проезд|пр-д|улица|ул)\b|\s+(переулок|пер|проезд|пр-д)\s+(?:ул|улица)\b)',
+        text,
+    )
+    if m:
+        unit = m.group(2) or m.group(3)
+        return [f"{m.group(1)}_{_NUM_UNIT_CANON[unit]}"]
+
+    m = re.search(
+        r'\b(переулок|пер|проезд|пр-д|улица|ул)\.?\s*(\d+)-?(?:й|я|ый|ая|ой|ий)\b',
+        text,
+    )
+    if m:
+        return [f"{m.group(2)}_{_NUM_UNIT_CANON[m.group(1)]}"]
+
+    m = re.search(
+        r'(?:^|[,\s])([а-яa-z])\s+(квартал|кв-л|мкр-н|мкр|микрорайон)'
+        r'(?:\.?\s*(?:,|$|\b(?:дом|д|зд|стр|корп|к|тер|территория)\b|\d))',
+        text,
+    )
+    if m:
+        return [f"{m.group(1)}_{_NUM_UNIT_CANON[m.group(2)]}"]
+
+    m = re.search(
+        r'\b(квартал|кв-л|мкр-н|мкр|микрорайон)\.?\s+([а-яa-z])(?=$|[\s,])(?!\s*\d)',
+        text,
+    )
+    if m:
+        return [f"{m.group(2)}_{_NUM_UNIT_CANON[m.group(1)]}"]
+
+    return []
+
+
 def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     """
     Extracts normalized address details:
@@ -501,13 +579,20 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     t = re.sub(r'[\s,]*\([а-яa-z0-9\s\.\-]+\)\s*$', '', t).strip()
     base_house, full_house = extract_house_components(t)
 
-    # Clean address from postal code, municipal 'г.о.' prefix, and unroll internal parentheses
+    # Clean address from postal code, municipal 'г.о.' prefix, parenthetical rural-settlement annotations, and unroll internal parentheses
     addr_clean = re.sub(r'\b\d{6}\b', '', t)
     addr_clean = re.sub(r'\bг\.?\s*о\.?(?=$|[^а-яa-z])', ' ', addr_clean)
-    addr_clean = addr_clean.replace('(', ' , ').replace(')', ' , ')
+    addr_clean = re.sub(
+        r'\(\s*[^)]*\b(?:с/п|с/с|с/о|г/п|с/пос|сельсовет|поселение)\b[^)]*\)',
+        ' ',
+        addr_clean,
+    )
+    addr_clean = addr_clean.replace('(', ' , ').replace(')', ' , ').replace('_', ' ')
     # Mask km phrases before street extraction so km digits/units don't pollute street tokens
     pat_km = r'(?:^|[,\s(])\d+[- ]*(?:й|ой|ий|ый|ая)?\s*(?:\([^)]*\)\s*)?(?:км|километр)\b|\b(?:км|километр)\.?\s*\d+\b'
     addr_clean_no_km = re.sub(pat_km, ' ', addr_clean, flags=re.IGNORECASE)
+    # Canonicalize anniversary street numbers ('30 лет Победы' / '30-летия Победы' -> '30_лет победы')
+    addr_clean_no_km = re.sub(r'\b(\d+)[- ]*лет(?:ия)?\b', r'\1_лет', addr_clean_no_km)
 
     parts = [p.strip() for p in addr_clean.split(',') if p.strip()]
 
@@ -515,13 +600,24 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     settlement_words = set()
 
     # Check major cities deterministically with word boundaries (supports glued 'гМосква')
+    # Skip matches used as street names or districts/regions (e.g. 'р-н Волжский', 'Волжский р-н')
     city_matches = []
     for mc in sorted(MAJOR_CITIES, key=len, reverse=True):
-        m_city = re.search(rf'(?:^|[^а-яa-z])(?:г\.?\s*)?({re.escape(mc)})(?=$|[^а-яa-z])', t)
-        if m_city:
-            prefix_ctx = t[max(0, m_city.start(1) - 12):m_city.start(1)]
-            if not re.search(rf'\b{STREET_TYPES}\.?\s*$', prefix_ctx):
-                city_matches.append((m_city.start(1), mc))
+        for m_city in re.finditer(rf'(?:^|[^а-яa-z])(?:г\.?\s*)?({re.escape(mc)})(?=$|[^а-яa-z])', t):
+            prefix_ctx = t[max(0, m_city.start(1) - 16):m_city.start(1)]
+            suffix_ctx = t[m_city.end(1):min(len(t), m_city.end(1) + 16)]
+            if re.search(
+                rf'\b(?:{STREET_TYPES}|р-н|р\.?\s*н|район|района|м\.?\s*р-н|обл|область|области|край|края|респ|республика|республики|с/п|с/с|с/о|г/п)\.?\s*$',
+                prefix_ctx,
+            ):
+                continue
+            if not re.search(r'\bг\.?\s*$', prefix_ctx) and re.search(
+                r'^\s+(?:р-н|район|района)\b\s*(?:,|$)|^\s+(?:обл|область|области|край|края|респ|республика|республики|с/п|с/с|с/о|г/п)\b',
+                suffix_ctx,
+            ):
+                continue
+            city_matches.append((m_city.start(1), mc))
+            break
     if city_matches:
         city_matches.sort(key=lambda item: (item[0], -len(item[1])))
         best_city = city_matches[0][1]
@@ -529,14 +625,25 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
         if not city:
             city = best_city
 
-    # Check settlement indicators
-    for pat in [
+    # Check settlement indicators (ignore slash admin abbreviations like 'с/п', 'с/с', 'с/о', 'г/п'
+    # and person initials inside street names like 'С.Юлаева ул', 'Г.Петровой ул', 'Ст.Разина ул')
+    for pat_idx, pat in enumerate([
         r'\b(?:город|поселок|пос|село|деревня|станица|хутор|пгт|рп|гп|сп)(?:\.\s*|\s+)([а-яa-z0-9\-]+)',
-        r'\b(?:г|п|с|д|х|ст)\.[\s]*([а-яa-z0-9\-]+)',
-        r'\b(?:г|п|с|х|ст)\s+([а-яa-z0-9\-]+)',
-        r'\b([а-яa-z0-9\-]+)\s+(?:г|п|с|д|пгт|рп|гп|сп)\b'
-    ]:
+        r'(?<![/\\])\b(?:г|п|с|д|х|ст)\.(?![/\\])[\s]*([а-яa-z0-9\-]+)',
+        r'(?<![/\\])\b(?:г|п|с|х|ст)\s+([а-яa-z0-9\-]+)',
+        r'\b([а-яa-z0-9\-]+)\s+(?:г|п|с|д|пгт|рп|гп|сп)\b(?![/\\])'
+    ]):
         for m in re.finditer(pat, addr_clean):
+            if pat_idx in (1, 2):
+                before_ctx = addr_clean[max(0, m.start() - 20):m.start()]
+                after_ctx = addr_clean[m.end():min(len(addr_clean), m.end() + 30)]
+                if re.search(rf'(?:\b(?:{STREET_TYPES}|им|имени)\.?\s*|\b[а-яa-z]\.\s*)$', before_ctx):
+                    continue
+                if re.search(
+                    rf'^\s+(?:[а-яa-z]\.\s*)*{STREET_TYPES}(?:\.?\s*(?:,|$|\b(?:дом|д|зд|здание|стр|корп|к)\b)|\s+\d+[а-яa-z]?(?:[/\\]\d+)?(?:\s*(?:,|$|\b(?:к|корп|корпус|стр|строение|лит|литера|кв|пом|оф|маг|м-н|тц|трц|тк)\b)))',
+                    after_ctx,
+                ):
+                    continue
             w = m.group(1).strip()
             if len(w) >= 2 and w not in {'ул', 'улица', 'дом', 'стр', 'корп', 'кв', 'пом', 'обл', 'область', 'край', 'район', 'рн', 'р-н'}:
                 settlement_words.add(w)
@@ -545,8 +652,8 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
 
     # Detect administrative regions and districts to prevent them from leaking into street tokens
     for pat in [
-        r'\b([а-яa-z0-9\-]+)\s+(?:обл|область|области|край|края|респ|республика|республики|р-н|район|района|округ|округа|ао)\b',
-        r'\b(?:обл|область|области|край|края|респ|республика|республики|р-н|район|района|округ|округа|ао)\.?\s*([а-яa-z0-9\-]+)',
+        r'\b([а-яa-z0-9\-]+)\s+(?:обл|область|области|край|края|респ|республика|республики|р-н|район|района|округ|округа|ао|с/п|с/с|с/о|г/п)\b',
+        r'\b(?:обл|область|области|край|края|респ|республика|республики|р-н|район|района|округ|округа|ао|с/п|с/с|с/о|г/п)\.?\s*([а-яa-z0-9\-]+)',
     ]:
         for m in re.finditer(pat, addr_clean):
             w = m.group(1).strip()
@@ -570,7 +677,9 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
     # Extract clean street tokens using explicit street patterns on text without km
     # Inside explicit street patterns (e.g. 'ул. Московская'), region adjectives are valid street names
     explicit_street_stop_words = ADDRESS_STOP_WORDS - REGION_ADJECTIVES
+    city_tokens = set(city.split()) if city else set()
     street_words = []
+    explicit_fallback_words = []
     for pat in STREET_PATTERNS:
         for m in re.finditer(pat, addr_clean_no_km):
             cand = m.group(1).strip()
@@ -578,30 +687,48 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
                 r'(?<=[а-яa-z])\s+\d+(?!-[а-яa-z])\b|\s+\b(?:дом|д|зд|стр|корп|к|пом|оф|кв|рынок|кафе|павильон|место|бутик|контейнер|тц|трц|тк)\b',
                 cand,
             )[0]
-            cand = re.sub(r'^\d+\s*|\s*\d+$', '', cand).strip()
-            cand_tokens = re.findall(r'[а-яa-z0-9]+', cand)
+            cand = re.sub(r'^\d+(?![\d_])\s*|(?:\s+|^)\d+$', '', cand).strip()
+            cand_tokens = re.findall(r'[а-яa-z0-9_]+', cand)
             words = [
                 w for w in cand_tokens
-                if len(w) >= 3 and w not in explicit_street_stop_words and w not in settlement_words and not any(c.isdigit() for c in w)
+                if len(w) >= 3 and w not in explicit_street_stop_words and w not in settlement_words and ('_' in w or not any(c.isdigit() for c in w))
             ]
             if not words:
                 # Preserve street names matching an oblast adjective (e.g. 'Московская обл, Подольск, ул. Московская')
-                city_tokens = set(city.split()) if city else set()
                 words = [
                     w for w in cand_tokens
-                    if len(w) >= 3 and w not in explicit_street_stop_words and w not in city_tokens and not any(c.isdigit() for c in w)
+                    if len(w) >= 3 and w not in explicit_street_stop_words and w not in city_tokens and ('_' in w or not any(c.isdigit() for c in w))
                 ]
             if words:
                 street_words = words
                 break
+            if not explicit_fallback_words and ',' not in m.group(0):
+                # Remember stopword/city-named explicit street (e.g. 'Набережная ул', 'Российская ул', 'Ананур ул')
+                # to use only if the address is not a numbered line/quarter/lane (e.g. '1 Линия ул', '4 Квартал ул')
+                cand_fb = [
+                    w for w in cand_tokens
+                    if len(w) >= 3 and not any(c.isdigit() for c in w) and (
+                        w in NAMED_STOPWORD_STREETS or (w in city_tokens and w not in ADDRESS_STOP_WORDS)
+                    )
+                ]
+                if cand_fb:
+                    explicit_fallback_words = cand_fb
         if street_words:
             break
 
+    # Numbered/lettered lines, quarters, microdistricts, lanes (e.g. '1 Линия ул', '4 Квартал ул', '35-й мкр', 'пер 5-й', 'В мкр')
+    if not street_words:
+        street_words = _extract_numbered_or_lettered_street(addr_clean_no_km)
+
+    # Restore explicit stopword or village-named street (e.g. 'Набережная ул', 'Российская ул', 'Россия пр-кт', 'Ананур ул')
+    if not street_words and explicit_fallback_words:
+        street_words = explicit_fallback_words
+
     # Fallback if street pattern didn't match: exclude all region/city/settlement/stop words
     if not street_words:
-        all_words = re.findall(r'[а-яa-z0-9]+', addr_clean_no_km)
+        all_words = re.findall(r'[а-яa-z0-9_]+', addr_clean_no_km)
         for w in all_words:
-            if len(w) >= 3 and w not in ADDRESS_STOP_WORDS and w not in settlement_words and not any(c.isdigit() for c in w):
+            if len(w) >= 3 and w not in ADDRESS_STOP_WORDS and w not in settlement_words and ('_' in w or not any(c.isdigit() for c in w)):
                 if not city or w not in city.split():
                     street_words.append(w)
 
@@ -649,6 +776,9 @@ def get_address_blocking_keys(
 
     # Street and city keys with house number
     stemmed_tokens = [stem_street_token(st) for st in street_tokens]
+
+    if not street_tokens and city_token and base_house != "б/н":
+        keys.append((f"city_{city_token}", base_house))
 
     if city_token:
         for st in street_tokens[:3]:

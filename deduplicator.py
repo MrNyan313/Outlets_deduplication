@@ -611,6 +611,9 @@ def calculate_outlet_match_score(
         stem_diff2 = s_stem2 - s_stem1
         # Compare distinguishing non-overlapping stems so shared generic words (e.g. 'вокзала') don't mask different streets
         if stem_diff1 and stem_diff2:
+            # Distinct numbered/lettered street units (e.g. '1_линия' vs '2_линия', 'в_мкр' vs 'г_мкр') never fuzzy-match
+            if any('_' in t for t in stem_diff1) and any('_' in t for t in stem_diff2):
+                return 0.0, False
             diff_str1 = ' '.join(sorted(stem_diff1))
             diff_str2 = ' '.join(sorted(stem_diff2))
             if fuzz.token_sort_ratio(diff_str1, diff_str2) < 75 and street_fuzzy < 85:
