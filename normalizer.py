@@ -65,13 +65,13 @@ REGION_WORDS = REGION_ADJECTIVES | REGION_ADMIN_UNITS
 ADDRESS_STOP_WORDS = REGION_WORDS | {
     'г', 'город', 'пгт', 'рп', 'гп', 'сп', 'п', 'поселок', 'пос', 'д', 'деревня',
     'с', 'село', 'ст', 'станица', 'х', 'хутор', 'с/с', 'с/совет',
-    'ул', 'улица', 'пркт', 'проспект', 'пр', 'проезд', 'пер', 'переулок',
-    'бул', 'бульвар', 'ш', 'шоссе', 'наб', 'набережная', 'пл', 'площадь',
-    'тракт', 'линия', 'аллея', 'тупик', 'кв-л', 'квартал', 'мкр', 'микрорайон',
-    'автодорога', 'а/д', 'территория', 'тер', 'км', 'километр',
+    'ул', 'улица', 'пркт', 'пр-кт', 'пр-т', 'просп', 'проспект', 'пр', 'пр-д', 'проезд',
+    'пер-к', 'пер', 'переулок', 'бул', 'б-р', 'бульвар', 'ш', 'шоссе', 'наб', 'набережная',
+    'пл', 'площадь', 'тракт', 'линия', 'аллея', 'туп', 'тупик', 'кв-л', 'квартал',
+    'мкр', 'микрорайон', 'автодорога', 'а/д', 'территория', 'тер', 'км', 'километр',
     'дом', 'кв', 'пом', 'стр', 'корп', 'здание', 'зд', 'корпус', 'строение',
     'литера', 'лит', 'помещение', 'комн', 'оф', 'офис', 'эт', 'этаж',
-    'ссив', 'дискаунтер', 'гипермаркет', 'супермаркет'
+    'ссив', 'дискаунтер', 'гипермаркет', 'супермаркет', 'индекс'
 }
 
 MAJOR_CITIES = {
@@ -89,7 +89,7 @@ MAJOR_CITIES = {
     'орел', 'орёл'
 }
 
-STREET_TYPES = r'(?:ул|улица|пр-кт|проспект|пр-д|проезд|пр|пер|переулок|бул|бульвар(?!\s+(?:ул|улица)\b)|шоссе|ш|наб|набережная(?!\s+(?:ул|улица|пер|переулок|пр-кт|проспект)\b)|пл|площадь(?!\s+(?:ул|улица)\b)|аллея(?!\s+(?:ул|улица)\b)|тракт|тупик|автодорога|а/д)'
+STREET_TYPES = r'(?:улица|ул|проспект|просп|пр-кт|пр-т|пр-д|проезд|пр|переулок|пер-к|пер|бульвар(?!\s+(?:ул|улица)\b)|бул|б-р|шоссе|ш|набережная(?!\s+(?:ул|улица|пер-к|пер|переулок|пр-кт|пр-т|проспект|просп)\b)|наб|площадь(?!\s+(?:ул|улица)\b)|пл|аллея(?!\s+(?:ул|улица)\b)|тракт|тупик|туп|автодорога|а/д)'
 
 _STREET_INITIALS = r'(?:[а-яa-z]{1,2}\.\s*){1,2}'
 
@@ -598,6 +598,7 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
         ' ',
         addr_clean,
     )
+    addr_clean_raw_parens = addr_clean
     addr_clean = addr_clean.replace('(', ' , ').replace(')', ' , ').replace('_', ' ')
     # Mask km phrases before street extraction so km digits/units don't pollute street tokens
     pat_km = r'(?:^|[,\s(])\d+[- ]*(?:й|ой|ий|ый|ая)?\s*(?:\([^)]*\)\s*)?(?:км|километр)\b|\b(?:км|километр)\.?\s*\d+\b'
@@ -737,13 +738,21 @@ def extract_address_details(raw_addr: str) -> Tuple[str, str, str, List[str]]:
 
     # Fallback if street pattern didn't match: exclude all region/city/settlement/stop words
     if not street_words:
-        # Cut off trailing house/shop details (e.g. 'кв-л Металлург 16 РТТ маг."Бытовая химия"' -> '... Металлург')
+        # Cut off trailing house/shop details (e.g. 'кв-л Металлург 16 РТТ маг."Бытовая химия"' -> '... Металлург',
+        # 'мкр Зелёный, д. 64, Новые ряды маг Бытовая Химия' -> '... зеленый')
         # Preserve leading microdistricts ('м-н Горняцкий, д. 5') and standalone landmarks ('Первомайский рынок')
-        fb_text = re.split(
-            r'\b(?:дом|д\.?\s*(?:№\s*)?\d|зд\.?\s*(?:№\s*)?\d|здание|ртт|маг\.?(?=\s|$|["«„])|магазин|павильон|контейнер|бутик|тц|трц|тк)\b|\b\d+[а-яa-z]?(?:[/\\]\d+)?\s+(?:ртт|маг|магазин|тц|трц|тк|павильон)\b',
-            addr_clean_no_km,
-        )[0]
-        for candidate_src in (fb_text, addr_clean_no_km):
+        fb_tail_re = (
+            r'\b(?:дом|здание|ртт|магазин|павильон|контейнер|бутик|тц|трц|тк)\b'
+            r'|\b(?:д|зд)\.?\s*(?:№\s*)?\d+[а-яa-z]?\b'
+            r'|\bмаг(?:\.|(?=\s|$|["«„,]))'
+            r'|\b\d+[а-яa-z]?(?:[/\\]\d+)?\s+(?:ртт|маг|магазин|тц|трц|тк|павильон)\b'
+        )
+        addr_no_parens = re.sub(r'\([^)]*\)', ' ', addr_clean_raw_parens).replace('_', ' ')
+        addr_no_parens_no_km = re.sub(pat_km, ' ', addr_no_parens, flags=re.IGNORECASE)
+        addr_no_parens_no_km = re.sub(r'\b(\d+)[- ]*лет(?:ия)?\b', r'\1_лет', addr_no_parens_no_km)
+        fb_no_parens = re.split(fb_tail_re, addr_no_parens_no_km)[0]
+        fb_text = re.split(fb_tail_re, addr_clean_no_km)[0]
+        for candidate_src in (fb_no_parens, fb_text, addr_clean_no_km):
             all_words = re.findall(r'[а-яa-z0-9_]+', candidate_src)
             for w in all_words:
                 if len(w) >= 3 and w not in ADDRESS_STOP_WORDS and w not in settlement_words and ('_' in w or not any(c.isdigit() for c in w)):

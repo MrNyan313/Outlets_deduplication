@@ -1696,6 +1696,40 @@ def test_spar_gln_slash_identical_and_address_in_name_does_not_merge_different_e
     assert res_vk[0][1] == STATUS_UNIQUE
 
 
+def test_novikov_old286_restored_and_village_named_llc_osoka_vs_sonkovo():
+    """
+    - Old 286: multi-digit 'д. 64, Новые ряды' cutoff restores coverage point 281475652562791 (Новиков С.Н. ФЛП) as SIMILAR (85%).
+    - Old 2948: 'Осока ООО' in village 'Синяя Осока' matches 'Осока ООО маг.Малинка № 562' as IDENTICAL (100%).
+    - Old 3893: 'СОНКОВО ООО' must still NOT merge with 'РАССВЕТ ООО, Магазин в Сонково'.
+    """
+    # 1. Old 286 (Новиков С.Н. ФЛП, 64г vs 64 -> SIMILAR 85%)
+    m_nov = make_row(281475652562791, 'Новиков С.Н. ФЛП', 'ДНР, г. Макеевка, м-н Зеленый, 64 Г', 1, dist='АТЛАНТ ЮГ ООО; СПЛАТ ГЛОБАЛ')
+    d_nov = make_row(83035118164925655, 'Новиков Сергей Николаевич (Донецк)', '286156, Донецкая Народная респ., г. Макеевка, мкр Зелёный, д. 64, Новые ряды маг Бытовая Химия', 0, dist='АТЛАНТ ЮГ ООО')
+    res_nov = OutletsDeduplicator([OutletRecord(0, m_nov, COL_INDICES), OutletRecord(1, d_nov, COL_INDICES)]).run(include_similarity=True)
+    assert len(res_nov) == 2
+    assert res_nov[0][0] == res_nov[1][0]
+    assert res_nov[1][1] == STATUS_SIMILAR
+    assert res_nov[1][3] == 85.0
+
+    # 2. Old 2948: shared corporate entity word 'Осока ООО' matches despite village 'Синяя Осока'
+    m_osoka = make_row(100, 'Осока ООО маг.Малинка № 562', '155034, Ивановская обл, Тейковский р-н, Синяя Осока д, Школьная ул, дом № 4а', 1)
+    d_osoka = make_row(101, 'Осока ООО', '155034, Ивановская обл, Тейковский р-н, Синяя Осока д, Школьная ул, дом № 4а', 0)
+    res_osoka = OutletsDeduplicator([OutletRecord(0, m_osoka, COL_INDICES), OutletRecord(1, d_osoka, COL_INDICES)]).run(include_similarity=True)
+    assert len(res_osoka) == 2
+    assert res_osoka[0][0] == res_osoka[1][0]
+    assert res_osoka[0][1] == STATUS_IDENTICAL
+    assert res_osoka[1][1] == STATUS_IDENTICAL
+    assert res_osoka[1][3] == 100.0
+
+    # 3. Old 3893: 'СОНКОВО ООО' must NOT merge with different LLC 'РАССВЕТ ООО, Магазин в Сонково'
+    m_sonk = make_row(200, 'СОНКОВО ООО', '171450, Россия, пгт.Сонково, ул. Красноармейская, д. 48', 1)
+    d_rass = make_row(201, 'РАССВЕТ ООО, Магазин в Сонково', 'Тверская обл., Сонковский р-н, пгт. Сонково, ул.Красноармейская д.48', 0)
+    res_sr = OutletsDeduplicator([OutletRecord(0, m_sonk, COL_INDICES), OutletRecord(1, d_rass, COL_INDICES)]).run()
+    assert len(res_sr) == 1
+    assert res_sr[0][1] == STATUS_UNIQUE
+
+
+
 
 
 

@@ -745,10 +745,29 @@ def calculate_outlet_match_score(
                     house_tokens.add(o.full_house)
                     house_tokens.update(re.findall(r'[0-9а-яa-z]+', o.full_house))
 
+            def _extract_corp_entity_words(raw_name: str) -> set:
+                rn = raw_name.lower().replace('ё', 'е')
+                words = set()
+                for cm in re.finditer(
+                    r'\b(?:ооо|зао|оао|пао|ао)[\s"\'«»„“”]+([а-яa-z0-9\-]{2,})\b'
+                    r'|\b([а-яa-z0-9\-]{2,})[\s"\'«»„“”]+(?:ооо|зао|оао|пао|ао)\b',
+                    rn,
+                ):
+                    cw = cm.group(1) or cm.group(2)
+                    if cw:
+                        for part in cw.split('-'):
+                            if len(part) >= 2 and part not in _ADDR_NAME_NOISE:
+                                words.add(part)
+                return words
+
+            shared_corp_words = _extract_corp_entity_words(outlet1.name) & _extract_corp_entity_words(outlet2.name)
+
             def _split_addr_tokens(clean_n: str) -> Tuple[List[str], set]:
                 kept, removed = [], set()
                 for w in clean_n.split():
-                    if (
+                    if w in shared_corp_words:
+                        kept.append(w)
+                    elif (
                         w in _ADDR_NAME_NOISE
                         or w in addr_words
                         or w in house_tokens

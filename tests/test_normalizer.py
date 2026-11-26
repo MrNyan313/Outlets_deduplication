@@ -321,5 +321,42 @@ def test_fallback_street_tail_cutoff_slash_gln_quoted_litera_and_initials_in_nam
     assert clean_store_name('ИП Петров А. В.') == "петров"
 
 
+def test_street_abbr_boulevard_prospekt_fallback_multidigit_house_and_parens():
+    # 1. 'б-р', 'пр-т', 'просп', 'пер-к', 'туп' recognized as explicit STREET_TYPES (case 5258)
+    assert extract_address_details(
+        '425200, Марий Эл Респ, р-н Медведевский, пгт Медведево (Ясная Поляна), б-р 75-летия Победы, д.1 помещение маг."Плёс" №34.'
+    ) == ("1", "1", "медведево", ["75_лет", "победы"])
+    assert extract_address_details('г. Белгород, б-р Богдана Хмельницкого, д. 10') == ("10", "10", "белгород", ["богдана", "хмельницкого"])
+    assert extract_address_details('Владимир, Суздальский пр-т, д. 28') == ("28", "28", "владимир", ["суздальский"])
+    assert extract_address_details('Калининград, Просп. Тельмана, д. 5') == ("5", "5", "калининград", ["тельмана"])
+    assert extract_address_details('г. Москва, Весенний пер-к, д. 3') == ("3", "3", "москва", ["весенний"])
+    assert extract_address_details('г. Самара, Заводской туп., д. 4') == ("4", "4", "самара", ["заводской"])
+
+    # 2. '!!ИНДЕКС!!' stop-word filtered out (case 8463)
+    assert extract_address_details(
+        '!!ИНДЕКС!!, Республика Северная Осетия — Алания, г. Владикавказ, Маркова 64'
+    ) == ("64", "64", "владикавказ", ["маркова"])
+
+    # 3. Fallback tail cutoff handles multi-digit houses (with optional litera) and parenthetical notes (case old 286)
+    assert extract_address_details(
+        '286156, Донецкая Народная респ., г. Макеевка, мкр Зелёный, д. 64, Новые ряды маг Бытовая Химия'
+    ) == ("64", "64", "макеевка", ["зеленый"])
+    assert extract_address_details(
+        'ДНР, г. Макеевка, мкр Зелёный, д. 64а, Новые ряды'
+    ) == ("64", "64а", "макеевка", ["зеленый"])
+    assert extract_address_details(
+        'Обл. Донецкая г. Макеевка кв-л Металлург, маг."Бытовая химия"'
+    ) == ("б/н", "б/н", "макеевка", ["металлург"])
+    _, _, city_stv, streets_stv = extract_address_details(
+        'Ставрополь Южный рынок ВМ75 (ГАЗЕЛЬ 50 / ГРУЗОВАЯ 60)'
+    )
+    assert city_stv == "ставрополь"
+    assert streets_stv == ["южный", "рынок"]
+    assert extract_address_details(
+        'Марий Эл Респ, пгт Медведево (Ясная Поляна), Центральная, д. 5'
+    ) == ("5", "5", "медведево", ["центральная"])
+
+
+
 
 
